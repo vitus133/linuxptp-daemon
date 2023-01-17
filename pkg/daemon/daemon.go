@@ -374,6 +374,16 @@ func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
+					substring := "timed out while polling for tx timestamp"
+					if strings.Contains(output, substring) {
+						f, err := os.OpenFile("/host/sys/kernel/debug/tracing/tracing_on", os.O_RDWR, 0644)
+
+						if err != nil {
+							glog.Fatal(err)
+						}
+						defer f.Close()
+						f.WriteString("0")
+					}
 					fmt.Printf("%s\n", output)
 					extractMetrics(p.configName, p.name, p.ifaces, output)
 				}

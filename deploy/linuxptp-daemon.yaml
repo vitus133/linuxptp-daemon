@@ -4,6 +4,8 @@ kind: DaemonSet
 metadata:
   name: linuxptp-daemon
   namespace: openshift-ptp
+  annotations:
+    target.workload.openshift.io/management: '{"effect":"PreferredDuringScheduling"}'
 spec:
   selector:
     matchLabels:
@@ -24,12 +26,18 @@ spec:
       serviceAccountName: linuxptp-daemon
       containers:
       - name: linuxptp-daemon-container
+        resources:
+          limits:
+            cpu: 20m
+          requests:
+            cpu: 20m
+            memory: 50Mi
         securityContext:
           privileged: true
-        image: openshift.io/linuxptp-daemon
+        image: quay.io/vgrinber/linuxptp-daemon:2
         command: [ "/bin/bash", "-c", "--" ]
         args: [ "/usr/local/bin/ptp --alsologtostderr" ]
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         env:
         - name: NODE_NAME
           valueFrom:
@@ -38,7 +46,13 @@ spec:
         volumeMounts:
         - name: config-volume
           mountPath: /etc/linuxptp
+        - mountPath: /host
+          name: host
       volumes:
         - name: config-volume
           configMap:
             name: linuxptp-configmap
+        - hostPath:
+            path: /
+            type: Directory
+          name: host            
