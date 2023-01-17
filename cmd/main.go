@@ -72,6 +72,13 @@ func main() {
 			stdoutToSocket = ret
 		}
 	}
+	f, err := os.OpenFile("/host/sys/kernel/debug/tracing/tracing_on", os.O_RDWR, 0644)
+
+	if err != nil {
+		glog.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString("1")
 
 	// Run a loop to update the device status
 	go daemon.RunDeviceStatusUpdate(ptpClient, nodeName)
