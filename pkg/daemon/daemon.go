@@ -319,19 +319,35 @@ func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 		//
 		// don't discard process stderr output
 		//
-		p.cmd.Stderr = os.Stderr
+
 		cmdReader, err := p.cmd.StdoutPipe()
 		if err != nil {
 			glog.Errorf("cmdRun() error creating StdoutPipe for %s: %v", p.name, err)
 			break
 		}
+		errReader, err := p.cmd.StderrPipe()
+		if err != nil {
+			glog.Errorf("cmdRun() error creating StderrPipe for %s: %v", p.name, err)
+			break
+		}
+
 		if !stdoutToSocket {
 			scanner := bufio.NewScanner(cmdReader)
+			errScanner := bufio.NewScanner(errReader)
 			go func() {
 				for scanner.Scan() {
 					output := scanner.Text()
+					fmt.Printf("%s\n", output)
+					extractMetrics(p.configName, p.name, p.ifaces, output)
+				}
+				done <- struct{}{}
+			}()
+			go func() {
+				for errScanner.Scan() {
+					output := errScanner.Text()
 					substring := "timed out while polling for tx timestamp"
 					if strings.Contains(output, substring) {
+						glog.Infof("Pattern match, turning off tracing: %s", output)
 						f, err := os.OpenFile("/host/sys/kernel/debug/tracing/tracing_on", os.O_RDWR, 0644)
 
 						if err != nil {
@@ -341,7 +357,6 @@ func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 						f.WriteString("0")
 					}
 					fmt.Printf("%s\n", output)
-					extractMetrics(p.configName, p.name, p.ifaces, output)
 				}
 				done <- struct{}{}
 			}()
