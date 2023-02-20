@@ -9,7 +9,8 @@ COPY . .
 RUN make clean && make
 
 FROM fedora:33
-RUN yum install -y linuxptp ethtool make hwdata
+RUN yum install -y linuxptp ethtool make hwdata strace python3
+COPY timex.py .
 COPY --from=builder /go/src/github.com/openshift/linuxptp-daemon/bin/ptp /usr/local/bin/ptp
 
 CMD ["/usr/local/bin/ptp"]
