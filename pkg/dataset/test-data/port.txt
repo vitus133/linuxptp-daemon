@@ -1,0 +1,23 @@
+sending: GET PORT_DATA_SET
+    40a6b7.fffe.0e41b0-1 seq 0 RESPONSE MANAGEMENT PORT_DATA_SET
+   	 portIdentity        	40a6b7.fffe.0e41b0-1
+   	 portState           	SLAVE
+   	 logMinDelayReqInterval  -4
+   	 peerMeanPathDelay   	0
+   	 logAnnounceInterval 	-3
+   	 announceReceiptTimeout  3
+   	 logSyncInterval     	-4
+   	 delayMechanism      	1
+   	 logMinPdelayReqInterval -4
+   	 versionNumber       	2
+    40a6b7.fffe.0e41b0-2 seq 0 RESPONSE MANAGEMENT PORT_DATA_SET
+   	 portIdentity        	40a6b7.fffe.0e41b0-2
+   	 portState           	MASTER
+   	 logMinDelayReqInterval  -4
+   	 peerMeanPathDelay   	0
+   	 logAnnounceInterval 	-3
+   	 announceReceiptTimeout  3
+   	 logSyncInterval     	-4
+   	 delayMechanism      	1
+   	 logMinPdelayReqInterval -4
+   	 versionNumber       	2

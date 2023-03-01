@@ -1,0 +1,5 @@
+sending: GET CURRENT_DATA_SET
+        40a6b7.fffe.0e41b0-0 seq 0 RESPONSE MANAGEMENT CURRENT_DATA_SET 
+                stepsRemoved     1
+                offsetFromMaster 1.0
+                meanPathDelay    354.0

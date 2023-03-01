@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -61,14 +62,22 @@ type PtpConfigList struct {
 }
 
 type PtpProfile struct {
-	Name                  *string            `json:"name"`
-	Interface             *string            `json:"interface,omitempty"`
-	Ptp4lOpts             *string            `json:"ptp4lOpts,omitempty"`
-	Phc2sysOpts           *string            `json:"phc2sysOpts,omitempty"`
-	Ptp4lConf             *string            `json:"ptp4lConf,omitempty"`
-	PtpSchedulingPolicy   *string            `json:"ptpSchedulingPolicy,omitempty"`
-	PtpSchedulingPriority *int64             `json:"ptpSchedulingPriority,omitempty"`
-	PtpClockThreshold     *PtpClockThreshold `json:"ptpClockThreshold,omitempty"`
+	Name        *string `json:"name"`
+	Interface   *string `json:"interface,omitempty"`
+	Ptp4lOpts   *string `json:"ptp4lOpts,omitempty"`
+	Phc2sysOpts *string `json:"phc2sysOpts,omitempty"`
+	Ts2PhcOpts  *string `json:"ts2phcOpts,omitempty"`
+	Ptp4lConf   *string `json:"ptp4lConf,omitempty"`
+	Phc2sysConf *string `json:"phc2sysConf,omitempty"`
+	Ts2PhcConf  *string `json:"ts2phcConf,omitempty"`
+	// +kubebuilder:validation:Enum=SCHED_OTHER;SCHED_FIFO;
+	PtpSchedulingPolicy *string `json:"ptpSchedulingPolicy,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65
+	PtpSchedulingPriority *int64                         `json:"ptpSchedulingPriority,omitempty"`
+	PtpClockThreshold     *PtpClockThreshold             `json:"ptpClockThreshold,omitempty"`
+	PtpSettings           map[string]string              `json:"ptpSettings,omitempty"`
+	Plugins               map[string]*apiextensions.JSON `json:"plugins,omitempty"`
 }
 
 type PtpClockThreshold struct {

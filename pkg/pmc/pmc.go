@@ -2,10 +2,14 @@ package pmc
 
 import (
 	"fmt"
-	"github.com/golang/glog"
-	"github.com/google/goexpect"
+	"os/exec"
 	"regexp"
+	"strings"
 	"time"
+
+	"github.com/golang/glog"
+	expect "github.com/google/goexpect"
+	"github.com/openshift/linuxptp-daemon/pkg/dataset"
 )
 
 var (
@@ -30,4 +34,21 @@ func RunPMCExp(configFileName, cmdStr string, promptRE *regexp.Regexp) (result s
 		err = e.Send("\x03")
 	}
 	return
+}
+
+// WIP
+func GetParentDs(configName string) (result dataset.ParentDs, err error) {
+
+	cmdLine := fmt.Sprintf("pmc -u -b 1 -f /var/run/%s", configName)
+	args := strings.Split(cmdLine, " ")
+	args = append(args, CmdParentDataSet)
+	out, err := exec.Command(args[0], args[1:]...).CombinedOutput()
+	if err != nil {
+		return dataset.ParentDs{}, err
+	}
+	ods, err := dataset.ParseParentDataSet(string(out))
+	if err != nil {
+		return dataset.ParentDs{}, err
+	}
+	return ods, nil
 }

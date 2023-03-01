@@ -1,0 +1,17 @@
+apiVersion: ptp.openshift.io/v1
+kind: PtpConfig
+metadata:
+  name: ptp-config-phc
+  namespace: openshift-ptp 
+spec:
+  profile: 
+  - name: "profile3" 
+    # ptp4lOpts: "-2 --summary_interval -4" 
+    phc2sysOpts: "-a -r -m -n 24 -N 8 -R 16"
+    # ptpSchedulingPolicy: "SCHED_FIFO"      
+    # ptpSchedulingPriority: 32
+  recommend: 
+  - profile: "profile3" 
+    priority: 4 
+    match: 
+    - nodeLabel: "node-role.kubernetes.io/master" 

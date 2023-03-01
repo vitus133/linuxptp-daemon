@@ -3,7 +3,6 @@ package daemon
 import (
 	"bufio"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -13,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openshift/linuxptp-daemon/pkg/bmca"
 	"github.com/openshift/linuxptp-daemon/pkg/pmc"
 
 	"github.com/golang/glog"
@@ -30,6 +30,12 @@ const (
 	ClockClassChangeIndicator = "selected best master clock"
 )
 
+type PortState struct {
+	port       int
+	state      ptpPortRole
+	configName string
+}
+
 // ProcessManager manages a set of ptpProcess
 // which could be ptp4l, phc2sys or timemaster.
 // Processes in ProcessManager will be started
@@ -41,6 +47,7 @@ type ProcessManager struct {
 type ptpProcess struct {
 	name            string
 	ifaces          []string
+	nonMasterPort   PortState
 	ptp4lSocketPath string
 	ptp4lConfigPath string
 	configName      string
@@ -77,6 +84,16 @@ type Daemon struct {
 
 	ptpUpdate *LinuxPTPConfUpdate
 
+	// operate in a high availability mode
+	highAvailabilityMode bool
+	// ticker for periodical BMCA in high availability mode
+	tickerHaBmca *time.Ticker
+	// tickerHaBmca periodicity configuration (seconds)
+	haBmcaPeriod int
+	stateChange  chan PortState
+	phcProfile   ptpv1.PtpProfile
+	phcProcess   ptpProcess
+
 	processManager *ProcessManager
 
 	// channel ensure LinuxPTP.Run() exit when main function exits.
@@ -92,29 +109,56 @@ func New(
 	kubeClient *kubernetes.Clientset,
 	ptpUpdate *LinuxPTPConfUpdate,
 	stopCh <-chan struct{},
+	haBmcaPeriod int,
 ) *Daemon {
 	if !stdoutToSocket {
 		RegisterMetrics(nodeName)
 	}
 	return &Daemon{
-		nodeName:       nodeName,
-		namespace:      namespace,
-		stdoutToSocket: stdoutToSocket,
-		kubeClient:     kubeClient,
-		ptpUpdate:      ptpUpdate,
-		processManager: &ProcessManager{},
-		stopCh:         stopCh,
+		nodeName:             nodeName,
+		namespace:            namespace,
+		stdoutToSocket:       stdoutToSocket,
+		kubeClient:           kubeClient,
+		ptpUpdate:            ptpUpdate,
+		processManager:       &ProcessManager{},
+		stopCh:               stopCh,
+		highAvailabilityMode: false,
+		haBmcaPeriod:         haBmcaPeriod,
+		tickerHaBmca:         time.NewTicker(time.Second * time.Duration(haBmcaPeriod)),
+		stateChange:          make(chan PortState),
+	}
+}
+
+func (dn *Daemon) HandleStateChange() {
+	for {
+		ps := <-dn.stateChange
+		if dn.highAvailabilityMode {
+			glog.Info(ps.port, ps.state, ps.configName)
+			for _, process := range dn.processManager.process {
+				if process.configName == ps.configName {
+					process.nonMasterPort.port = ps.port
+					process.nonMasterPort.state = ps.state
+				}
+			}
+			dn.HandleBmcaTicker()
+		}
 	}
 }
 
 // Run in a for loop to listen for any LinuxPTPConfUpdate changes
 func (dn *Daemon) Run() {
+	defer dn.tickerHaBmca.Stop()
+	go dn.HandleStateChange()
 	for {
 		select {
 		case <-dn.ptpUpdate.UpdateCh:
 			err := dn.applyNodePTPProfiles()
 			if err != nil {
 				glog.Errorf("linuxPTP apply node profile failed: %v", err)
+			}
+		case <-dn.tickerHaBmca.C:
+			if dn.highAvailabilityMode && !dn.phcProcess.stopped {
+				dn.HandleBmcaTicker()
 			}
 		case <-dn.stopCh:
 			for _, p := range dn.processManager.process {
@@ -127,6 +171,78 @@ func (dn *Daemon) Run() {
 			return
 		}
 	}
+}
+
+func (dn *Daemon) HandleBmcaTicker() {
+	glog.Info(">>>>> BMCA handler")
+	var ports []bmca.BmcaPort
+
+	for _, process := range dn.processManager.process {
+		if process.nonMasterPort.state == SLAVE {
+			var port bmca.BmcaPort
+			glog.Infof("Config %s, port %s is a candidate for BMCA",
+				process.configName, process.ifaces[process.nonMasterPort.port-1])
+
+			parent, e := pmc.GetParentDs(process.configName)
+			if e != nil {
+				glog.Info(e)
+			}
+			port.GmClockClass = parent.GmClockClass
+			port.ConfigName = process.configName
+			glog.Info(parent)
+			ports = append(ports, port)
+		}
+	}
+	haMode := ""
+	var selectedPort bmca.BmcaPort
+	if m, found := dn.phcProfile.PtpSettings["haMode"]; found {
+		haMode = m
+		glog.Infof("High availability mode: %s", haMode)
+	}
+	filteredPorts := bmca.SortAndFilter(ports, bmca.GmClockClass)
+	selectedPort = filteredPorts[0]
+	if haMode == "active-active" {
+		currentPhcConfigName := dn.phcProcess.configName
+		for _, p := range filteredPorts {
+			if p.ConfigName == currentPhcConfigName {
+				selectedPort = p
+				break
+			}
+		}
+	}
+	glog.Infof("Selected %s", selectedPort.ConfigName)
+	dn.selectSyncSource(selectedPort.ConfigName)
+
+}
+
+func (dn *Daemon) selectSyncSource(config string) {
+
+	if dn.phcProcess.configName == config && dn.phcProcess.configName != "" {
+		glog.Infof("no sync source change needed, stay on %s", config)
+
+		return
+	}
+	if dn.phcProcess.configName != "" && !dn.phcProcess.stopped {
+		glog.Infof("stop phc on  %s", dn.phcProcess.configName)
+		dn.phcProcess.stopped = true
+		cmdStop(&dn.phcProcess)
+	}
+
+	dn.phcProcess.name = "phc2sys"
+	dn.phcProcess.configName = config
+	dn.phcProcess.stopped = false
+	dn.phcProcess.exitCh = make(chan bool)
+	runID := strings.Split(config, ".")[1]
+	socketPath := fmt.Sprintf("/var/run/ptp4l.%s.socket", runID)
+	cmdLine := fmt.Sprintf("/usr/sbin/phc2sys %s -z %s -t [%s]", *dn.phcProfile.Phc2sysOpts,
+		socketPath, config)
+	//cmdLine = addScheduling(nodeProfile, cmdLine)
+
+	args := strings.Split(cmdLine, " ")
+
+	dn.phcProcess.cmd = exec.Command(args[0], args[1:]...)
+	go cmdRun(&dn.phcProcess, dn.stdoutToSocket, dn.stateChange)
+
 }
 
 func printWhenNotNil(p interface{}, description string) {
@@ -166,22 +282,31 @@ func (dn *Daemon) applyNodePTPProfiles() error {
 	// TODO:
 	// compare nodeProfile with previous config,
 	// only apply when nodeProfile changes
+	if dn.isHighAvailability() {
+		dn.highAvailabilityMode = true
+	} else {
+		dn.highAvailabilityMode = false
+	}
 
 	glog.Infof("updating NodePTPProfiles to:")
 	runID := 0
 	for _, profile := range dn.ptpUpdate.NodeProfiles {
-		err := dn.applyNodePtpProfile(runID, &profile)
-		if err != nil {
-			return err
+		if !dn.highAvailabilityMode || profile.Phc2sysOpts == nil {
+			err := dn.applyNodePtpProfile(runID, &profile)
+			if err != nil {
+				return err
+			}
+			runID++
+		} else {
+			dn.phcProfile = profile
 		}
-		runID++
 	}
 
 	// Start all the process
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			time.Sleep(1 * time.Second)
-			go cmdRun(p, dn.stdoutToSocket)
+			go cmdRun(p, dn.stdoutToSocket, dn.stateChange)
 		}
 	}
 	return nil
@@ -219,7 +344,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 	}
 
 	configPath := fmt.Sprintf("/var/run/%s", configFile)
-	err = ioutil.WriteFile(configPath, []byte(*nodeProfile.Ptp4lConf), 0644)
+	err = os.WriteFile(configPath, []byte(*nodeProfile.Ptp4lConf), 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write the configuration file named %s: %v", configPath, err)
 	}
@@ -344,7 +469,7 @@ func processStatus(c *net.Conn, processName, cfgName string, status int64) {
 }
 
 // cmdRun runs given ptpProcess and restarts on errors
-func cmdRun(p *ptpProcess, stdoutToSocket bool) {
+func cmdRun(p *ptpProcess, stdoutToSocket bool, stateChange chan PortState) {
 	var c net.Conn
 	done := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
@@ -375,7 +500,7 @@ func cmdRun(p *ptpProcess, stdoutToSocket bool) {
 				for scanner.Scan() {
 					output := scanner.Text()
 					fmt.Printf("%s\n", output)
-					extractMetrics(p.configName, p.name, p.ifaces, output)
+					extractMetrics(p.configName, p.name, p.ifaces, output, stateChange)
 				}
 				done <- struct{}{}
 			}()

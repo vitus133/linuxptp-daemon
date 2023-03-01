@@ -172,7 +172,7 @@ func updatePTPMetrics(from, process, iface string, ptpOffset, maxPtpOffset, freq
 }
 
 // extractMetrics ...
-func extractMetrics(configName, processName string, ifaces []string, output string) {
+func extractMetrics(configName, processName string, ifaces []string, output string, stateChange chan PortState) {
 	if strings.Contains(output, " max ") {
 		ifaceName, ptpOffset, maxPtpOffset, frequencyAdjustment, delay := extractSummaryMetrics(configName, processName, output)
 		if ifaceName != "" {
@@ -200,18 +200,25 @@ func extractMetrics(configName, processName string, ifaces []string, output stri
 	}
 	if processName == ptp4lProcessName {
 		if portId, role := extractPTP4lEventState(output); portId > 0 {
+			var portState = PortState{
+				port:       portId,
+				state:      role,
+				configName: configName,
+			}
 			if len(ifaces) >= portId-1 {
 				UpdateInterfaceRoleMetrics(processName, ifaces[portId-1], role)
 				if role == SLAVE {
 					r := []rune(ifaces[portId-1])
 					masterOffsetIfaceName[configName] = string(r[:len(r)-1]) + "x"
 					slaveIfaceName[configName] = ifaces[portId-1]
+					stateChange <- portState
 				} else if role == FAULTY {
 					if isSlaveFaulty(configName, ifaces[portId-1]) {
 						updatePTPMetrics(master, processName, getMasterOffsetIfaceName(configName), faultyOffset, faultyOffset, 0, 0)
 						updatePTPMetrics(phc, phcProcessName, clockRealTime, faultyOffset, faultyOffset, 0, 0)
 						masterOffsetIfaceName[configName] = ""
 						slaveIfaceName[configName] = ""
+						stateChange <- portState
 					}
 				}
 			}
@@ -435,6 +442,8 @@ func extractPTP4lEventState(output string) (portId int, role ptpPortRole) {
 	} else if strings.Contains(output, "UNCALIBRATED to PASSIVE") || strings.Contains(output, "MASTER to PASSIVE") ||
 		strings.Contains(output, "SLAVE to PASSIVE") {
 		role = PASSIVE
+	} else if strings.Contains(output, "SLAVE to ") {
+		role = FAULTY
 	} else if strings.Contains(output, "UNCALIBRATED to MASTER") || strings.Contains(output, "LISTENING to MASTER") {
 		role = MASTER
 	} else if strings.Contains(output, "FAULT_DETECTED") || strings.Contains(output, "SYNCHRONIZATION_FAULT") {
