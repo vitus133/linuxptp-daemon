@@ -1,0 +1,4 @@
+[submodule "linuxptp"]
+	path = linuxptp
+	url = git@github.com:vitus133/linuxptp.git
+	branch = phc2sys-multi-domain
