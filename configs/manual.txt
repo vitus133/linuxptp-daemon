@@ -1,0 +1,88 @@
+
+/usr/sbin/ptp4l -f /var/run/ptp4l.1.config -s -2 -m
+/usr/sbin/phc2sys -a -r -n 24 -u 8 -m -z /var/run/ptp4l.0.socket -z /var/run/ptp4l.1.socket
+
+sh-4.4# /usr/sbin/phc2sys -a -r -n 24 -u 8 -m -z /var/run/ptp4l.0.socket -z /var/run/ptp4l.1.socket
+phc2sys[10030.934]: reconfiguring after port state change
+phc2sys[10030.934]: selecting ens1f0 as domain source clock
+phc2sys[10030.934]: selecting ens1f1 as domain source clock
+phc2sys[10030.934]: selecting ens1f0 as out-of-domain source clock
+phc2sys[10037.935]: CLOCK_REALTIME rms 31292 max 62598 freq +29808 +/-  11 delay   516 +/-   4
+phc2sys[10045.935]: CLOCK_REALTIME rms    7 max   14 freq +29812 +/-   6 delay   512 +/-   2
+phc2sys[10053.936]: CLOCK_REALTIME rms   12 max   18 freq +29812 +/-  11 delay   514 +/-   4
+phc2sys[10061.937]: CLOCK_REALTIME rms    6 max   13 freq +29813 +/-   5 delay   516 +/-   5
+phc2sys[10069.938]: CLOCK_REALTIME rms   10 max   17 freq +29813 +/-   8 delay   520 +/-   3
+phc2sys[10077.938]: CLOCK_REALTIME rms    8 max   15 freq +29816 +/-   7 delay   522 +/-   2
+phc2sys[10085.939]: CLOCK_REALTIME rms    8 max   14 freq +29815 +/-   7 delay   516 +/-   3
+phc2sys[10093.940]: CLOCK_REALTIME rms    4 max    9 freq +29811 +/-   3 delay   517 +/-   4
+phc2sys[10101.941]: CLOCK_REALTIME rms   10 max   17 freq +29813 +/-   9 delay   521 +/-   3
+phc2sys[10109.941]: CLOCK_REALTIME rms   10 max   13 freq +29809 +/-   9 delay   516 +/-   6
+phc2sys[10117.942]: CLOCK_REALTIME rms   11 max   23 freq +29814 +/-   9 delay   521 +/-   2
+phc2sys[10125.943]: CLOCK_REALTIME rms    7 max   13 freq +29813 +/-   7 delay   520 +/-   4
+phc2sys[10133.944]: CLOCK_REALTIME rms   11 max   17 freq +29808 +/-   9 delay   521 +/-   4
+phc2sys[10141.944]: CLOCK_REALTIME rms    8 max   12 freq +29811 +/-   7 delay   522 +/-   4
+phc2sys[10149.945]: CLOCK_REALTIME rms   10 max   24 freq +29806 +/-   9 delay   513 +/-   2
+phc2sys[10155.946]: port ac1f6b.fffe.e17d12-1 changed state
+phc2sys[10155.946]: reconfiguring after port state change
+phc2sys[10155.946]: selecting ens1f0 for synchronization
+phc2sys[10155.946]: selecting ens1f1 as domain source clock
+phc2sys[10155.946]: selecting ens1f1 as out-of-domain source clock
+phc2sys[10157.946]: CLOCK_REALTIME rms    8 max   15 freq +29808 +/-   8 delay   516 +/-   4
+phc2sys[10162.947]: ens1f0 rms    6 max   12 freq   +467 +/-   5 delay  2439 +/-   5
+phc2sys[10165.947]: CLOCK_REALTIME rms    3 max    4 freq +29808 +/-   2 delay   516 +/-   4
+phc2sys[10170.948]: ens1f0 rms   13 max   23 freq   +467 +/-  12 delay  2449 +/-  45
+phc2sys[10173.948]: CLOCK_REALTIME rms    5 max    9 freq +29806 +/-   5 delay   516 +/-   5
+phc2sys[10178.949]: ens1f0 rms    6 max   10 freq   +468 +/-   5 delay  2473 +/-  87
+phc2sys[10181.949]: CLOCK_REALTIME rms    7 max   13 freq +29808 +/-   6 delay   515 +/-   4
+phc2sys[10186.950]: ens1f0 rms   10 max   15 freq   +469 +/-   9 delay  2464 +/-  69
+phc2sys[10189.950]: CLOCK_REALTIME rms    5 max   11 freq +29804 +/-   5 delay   514 +/-   2
+phc2sys[10194.951]: ens1f0 rms    9 max   18 freq   +464 +/-   6 delay  2442 +/-   7
+phc2sys[10197.951]: CLOCK_REALTIME rms    4 max    8 freq +29805 +/-   4 delay   513 +/-   2
+phc2sys[10200.953]: port ac1f6b.fffe.e17d12-1 changed state
+phc2sys[10200.953]: reconfiguring after port state change
+phc2sys[10200.953]: master clock not ready, waiting...
+phc2sys[10201.953]: port ac1f6b.fffe.e17d12-1 changed state
+phc2sys[10201.953]: reconfiguring after port state change
+phc2sys[10201.954]: selecting ens1f0 as domain source clock
+phc2sys[10201.954]: selecting ens1f1 as domain source clock
+phc2sys[10201.954]: selecting ens1f0 as out-of-domain source clock
+phc2sys[10205.954]: CLOCK_REALTIME rms    9 max   17 freq +29806 +/-   9 delay   514 +/-   2
+phc2sys[10213.955]: CLOCK_REALTIME rms   15 max   29 freq +29805 +/-  13 delay   516 +/-   4
+phc2sys[10221.955]: CLOCK_REALTIME rms    7 max   15 freq +29807 +/-   6 delay   522 +/-   2
+phc2sys[10229.956]: CLOCK_REALTIME rms   14 max   24 freq +29807 +/-  13 delay   522 +/-   3
+phc2sys[10237.957]: CLOCK_REALTIME rms    6 max   10 freq +29807 +/-   5 delay   520 +/-   2
+phc2sys[10245.958]: CLOCK_REALTIME rms    8 max   13 freq +29813 +/-   8 delay   522 +/-   2
+phc2sys[10253.958]: CLOCK_REALTIME rms   13 max   25 freq +29809 +/-  11 delay   521 +/-   2
+phc2sys[10261.959]: CLOCK_REALTIME rms    8 max   18 freq +29815 +/-   6 delay   519 +/-   3
+phc2sys[10269.960]: CLOCK_REALTIME rms    9 max   15 freq +29811 +/-   9 delay   514 +/-   4
+phc2sys[10277.961]: CLOCK_REALTIME rms    8 max   13 freq +29811 +/-   7 delay   519 +/-   2
+phc2sys[10285.962]: CLOCK_REALTIME rms    8 max   16 freq +29809 +/-   7 delay   520 +/-   2
+^Csh-4.4# /usr/sbin/phc2sys -a -r -n 24 -u 8 -m -z /var/run/ptp4l.0.socket -z /var/run/ptp4l.1.socket
+phc2sys[10506.461]: reconfiguring after port state change
+phc2sys[10506.461]: selecting ens1f0 as domain source clock
+phc2sys[10506.461]: selecting ens1f1 as domain source clock
+phc2sys[10506.461]: selecting ens1f0 as out-of-domain source clock
+phc2sys[10513.463]: CLOCK_REALTIME rms  899 max 1415 freq +29635 +/- 493 delay   517 +/-   2
+phc2sys[10521.463]: CLOCK_REALTIME rms   35 max   93 freq +29834 +/-  21 delay   518 +/-   2
+phc2sys[10529.464]: CLOCK_REALTIME rms    5 max   11 freq +29825 +/-   4 delay   519 +/-   2
+phc2sys[10537.465]: CLOCK_REALTIME rms    6 max    9 freq +29827 +/-   6 delay   520 +/-   3
+phc2sys[10545.466]: CLOCK_REALTIME rms    8 max   15 freq +29821 +/-   9 delay   514 +/-   4
+phc2sys[10553.466]: CLOCK_REALTIME rms   10 max   25 freq +29827 +/-   7 delay   513 +/-   3
+phc2sys[10561.467]: CLOCK_REALTIME rms    6 max   10 freq +29827 +/-   5 delay   513 +/-   4
+phc2sys[10569.468]: CLOCK_REALTIME rms    5 max    8 freq +29823 +/-   4 delay   512 +/-   3
+phc2sys[10577.469]: CLOCK_REALTIME rms    8 max   13 freq +29824 +/-   7 delay   514 +/-   3
+phc2sys[10585.469]: CLOCK_REALTIME rms    4 max    7 freq +29823 +/-   4 delay   514 +/-   1
+phc2sys[10593.470]: CLOCK_REALTIME rms    7 max   12 freq +29822 +/-   6 delay   514 +/-   3
+phc2sys[10601.472]: CLOCK_REALTIME rms    5 max    9 freq +29822 +/-   5 delay   516 +/-   4
+phc2sys[10609.473]: CLOCK_REALTIME rms   10 max   24 freq +29820 +/-   9 delay   521 +/-   2
+phc2sys[10617.473]: CLOCK_REALTIME rms    8 max   15 freq +29827 +/-   6 delay   522 +/-   3
+phc2sys[10625.474]: CLOCK_REALTIME rms    7 max   11 freq +29823 +/-   6 delay   523 +/-   3
+phc2sys[10633.475]: CLOCK_REALTIME rms    6 max   10 freq +29822 +/-   5 delay   520 +/-   4
+phc2sys[10641.476]: CLOCK_REALTIME rms   16 max   32 freq +29822 +/-  14 delay   521 +/-   4
+phc2sys[10649.476]: CLOCK_REALTIME rms    5 max    8 freq +29828 +/-   4 delay   523 +/-   1
+phc2sys[10657.477]: CLOCK_REALTIME rms    6 max   11 freq +29826 +/-   5 delay   522 +/-   2
+phc2sys[10665.478]: CLOCK_REALTIME rms    5 max   11 freq +29825 +/-   5 delay   521 +/-   3
+phc2sys[10673.479]: CLOCK_REALTIME rms   14 max   26 freq +29825 +/-  13 delay   520 +/-   2
+phc2sys[10681.480]: CLOCK_REALTIME rms    4 max   10 freq +29825 +/-   3 delay   522 +/-   3
+phc2sys[10689.482]: CLOCK_REALTIME rms    6 max   11 freq +29824 +/-   6 delay   518 +/-   3
+phc2sys[10697.483]: CLOCK_REALTIME rms   10 max   19 freq +29822 +/-   9 delay   521 +/-   4
