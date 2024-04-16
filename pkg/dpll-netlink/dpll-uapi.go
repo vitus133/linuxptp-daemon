@@ -6,6 +6,8 @@ package dpll_netlink
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 )
 
 const DPLL_MCGRP_MONITOR = "monitor"
@@ -110,8 +112,6 @@ func GetMode(md uint32) string {
 	modeMap := map[int]string{
 		1: "manual",
 		2: "automatic",
-		3: "holdover",
-		4: "freerun",
 	}
 	mode, found := modeMap[int(md)]
 	if found {
@@ -122,31 +122,41 @@ func GetMode(md uint32) string {
 
 // DpllStatusHR represents human-readable DPLL status
 type DpllStatusHR struct {
-	Id            uint32
-	ModuleName    string
-	Mode          string
-	ModeSupported string
-	LockStatus    string
-	ClockId       string
-	Type          string
+	Timestamp     time.Time `json:"timestamp"`
+	Id            uint32    `json:"id"`
+	ModuleName    string    `json:"moduleName"`
+	Mode          string    `json:"mode"`
+	ModeSupported string    `json:"modeSupported"`
+	LockStatus    string    `json:"lockStatus"`
+	ClockId       string    `json:"clockId"`
+	Type          string    `json:"type"`
+	Temp          float64   `json:"temp"`
 }
 
 // GetDpllStatusHR returns human-readable DPLL status
-func GetDpllStatusHR(reply *DoDeviceGetReply) DpllStatusHR {
-	return DpllStatusHR{
-		Id:         reply.Id,
-		ModuleName: reply.ModuleName,
-		Mode:       GetMode(reply.Mode),
-		LockStatus: GetLockStatus(reply.LockStatus),
-		ClockId:    fmt.Sprintf("0x%x", reply.ClockId),
-		Type:       GetDpllType(reply.Type),
+func GetDpllStatusHR(reply *DoDeviceGetReply, timestamp time.Time) ([]byte, error) {
+	var modes []string
+	for _, md := range reply.ModeSupported {
+		modes = append(modes, GetMode(md))
+	}
+	hr := DpllStatusHR{
+		Timestamp:     timestamp,
+		Id:            reply.Id,
+		ModuleName:    reply.ModuleName,
+		Mode:          GetMode(reply.Mode),
+		ModeSupported: fmt.Sprint(strings.Join(modes[:], ",")),
+		LockStatus:    GetLockStatus(reply.LockStatus),
+		ClockId:       fmt.Sprintf("0x%x", reply.ClockId),
+		Type:          GetDpllType(reply.Type),
+		Temp:          float64(reply.Temp) / DPLL_TEMP_DIVIDER,
 	}
 }
 
-// DoPinGetReply is used with the DoPinGet method.
-type DoPinGetReplyHR struct {
+// PinInfo is used with the DoPinGet method.
+type PinInfoHR struct {
+	Timestamp                 time.Time         `json:"timestamp"`
 	Id                        uint32            `json:"id"`
-	ClockId                   uint64            `json:"clockId"`
+	ClockId                   string            `json:"clockId"`
 	BoardLabel                string            `json:"boardLabel"`
 	PanelLabel                string            `json:"panelLabel"`
 	PackageLabel              string            `json:"packageLabel"`
@@ -165,11 +175,11 @@ type DoPinGetReplyHR struct {
 
 // PinParentDevice contains nested netlink attributes.
 type PinParentDeviceHR struct {
-	ParentId    uint32 `json:"parentId"`
-	Direction   string `json:"direction"`
-	Prio        uint32 `json:"prio"`
-	State       string `json:"state"`
-	PhaseOffset int64  `json:"phaseOffset"`
+	ParentId      uint32  `json:"parentId"`
+	Direction     string  `json:"direction"`
+	Prio          uint32  `json:"prio"`
+	State         string  `json:"state"`
+	PhaseOffsetPs float64 `json:"phaseOffsetPs"`
 }
 
 // PinParentPin contains nested netlink attributes.
@@ -241,10 +251,11 @@ func GetPinCapabilities(c uint32) string {
 }
 
 // GetPinInfoHR returns human-readable pin status
-func GetPinInfoHR(reply *DoPinGetReply) ([]byte, error) {
-	hr := DoPinGetReplyHR{
+func GetPinInfoHR(reply *PinInfo, timestamp time.Time) ([]byte, error) {
+	hr := PinInfoHR{
+		Timestamp:          timestamp,
 		Id:                 reply.Id,
-		ClockId:            reply.ClockId,
+		ClockId:            fmt.Sprintf("0x%x", reply.ClockId),
 		BoardLabel:         reply.BoardLabel,
 		PanelLabel:         reply.PanelLabel,
 		PackageLabel:       reply.PackageLabel,
@@ -253,11 +264,11 @@ func GetPinInfoHR(reply *DoPinGetReply) ([]byte, error) {
 		FrequencySupported: reply.FrequencySupported,
 		Capabilities:       GetPinCapabilities(reply.Capabilities),
 		ParentDevice: PinParentDeviceHR{
-			ParentId:    reply.ParentDevice.ParentId,
-			Direction:   GetPinDirection(reply.ParentDevice.Direction),
-			Prio:        reply.ParentDevice.Prio,
-			State:       GetPinState(reply.ParentDevice.State),
-			PhaseOffset: reply.ParentDevice.PhaseOffset,
+			ParentId:      reply.ParentDevice.ParentId,
+			Direction:     GetPinDirection(reply.ParentDevice.Direction),
+			Prio:          reply.ParentDevice.Prio,
+			State:         GetPinState(reply.ParentDevice.State),
+			PhaseOffsetPs: float64(reply.ParentDevice.PhaseOffset) / DPLL_PHASE_OFFSET_DIVIDER,
 		},
 		ParentPin: PinParentPinHR{
 			ParentId: reply.ParentPin.ParentId,
