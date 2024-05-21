@@ -18,6 +18,7 @@ import (
 
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/daemon"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	ptpv1 "github.com/openshift/ptp-operator/api/v1"
 	ptpclient "github.com/openshift/ptp-operator/pkg/client/clientset/versioned"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,9 +26,10 @@ import (
 )
 
 type cliParams struct {
-	updateInterval  int
-	profileDir      string
-	pmcPollInterval int
+	updateInterval    int
+	profileDir        string
+	pmcPollInterval   int
+	leapUserConfigDir string
 }
 
 // Parse Command line flags
@@ -38,6 +40,8 @@ func flagInit(cp *cliParams) {
 		"profile to start linuxptp processes")
 	flag.IntVar(&cp.pmcPollInterval, "pmc-poll-interval", config.DefaultPmcPollInterval,
 		"Interval for periodical PMC poll")
+	flag.StringVar(&cp.leapUserConfigDir, "leap-user-config-path", config.DefaultLeapUserConfigPath,
+		"leap seconds user config")
 }
 
 func main() {
@@ -48,6 +52,7 @@ func main() {
 	glog.Infof("resync period set to: %d [s]", cp.updateInterval)
 	glog.Infof("linuxptp profile path set to: %s", cp.profileDir)
 	glog.Infof("pmc poll interval set to: %d [s]", cp.pmcPollInterval)
+	glog.Infof("LEAP: leap seconds user config path set to: %s", cp.leapUserConfigDir)
 
 	cfg, err := config.GetKubeConfig()
 	if err != nil {
@@ -109,6 +114,9 @@ func main() {
 	hwconfigs := []ptpv1.HwConfig{}
 	refreshNodePtpDevice := true
 	closeProcessManager := make(chan bool)
+	lm := leap.New(cp.leapUserConfigDir)
+	go lm.Run()
+	defer close(lm.Close)
 	go daemon.New(
 		nodeName,
 		daemon.PtpNamespace,
@@ -121,6 +129,7 @@ func main() {
 		&refreshNodePtpDevice,
 		closeProcessManager,
 		cp.pmcPollInterval,
+		lm,
 	).Run()
 
 	tickerPull := time.NewTicker(time.Second * time.Duration(cp.updateInterval))

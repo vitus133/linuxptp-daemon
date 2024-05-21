@@ -13,6 +13,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/openshift/linuxptp-daemon/pkg/config"
 	"github.com/openshift/linuxptp-daemon/pkg/event"
+	"github.com/openshift/linuxptp-daemon/pkg/leap"
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
 	gpsdlib "github.com/stratoberry/go-gpsd"
 )
@@ -43,6 +44,7 @@ type GPSD struct {
 	subscriber           *GPSDSubscriber
 	monitorCtx           context.Context
 	monitorCancel        context.CancelFunc
+	leapManager          *leap.LeapManager
 }
 
 // GPSDSubscriber ... event subscriber
@@ -245,6 +247,16 @@ retry:
 						nStatus = ublox.ExtractNavStatus(nextLine)
 						emptyCount = 0
 						missedTickers = 0
+					} else if strings.Contains(output, "UBX-NAV-TIMELS") {
+						emptyCount = 0
+						missedTickers = 0
+						lines := []string{}
+						for i := 0; i < 4; i++ {
+							line := ublx.UbloxPollPull()
+							lines = append(lines, line)
+						}
+						timeLs := ublox.ExtractLeapSec(lines)
+						g.leapManager.UbloxLsInd <- *timeLs
 					} else if len(output) == 0 {
 						emptyCount++
 					}
