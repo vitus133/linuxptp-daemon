@@ -1,8 +1,11 @@
 package leap
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"html/template"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -98,8 +101,24 @@ func ParseLeapFile(b []byte) (*LeapFile, error) {
 	return &l, nil
 }
 
-func (l *LeapManager) PopulateLeapData() error {
+func (l *LeapManager) RenderLeapData() (*bytes.Buffer, error) {
+	templateFile := "templates/leap-seconds.list.template"
+	templ, err := template.ParseFiles(templateFile)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	bufWriter := bufio.NewWriter(&buf)
 
+	err = templ.Execute(bufWriter, l.leapFile)
+	if err != nil {
+		return nil, err
+	}
+	bufWriter.Flush()
+	return &buf, nil
+}
+
+func (l *LeapManager) PopulateLeapData() error {
 	cm, err := l.client.CoreV1().ConfigMaps(l.namespace).Get(context.TODO(), leapConfigMapName, metav1.GetOptions{})
 	nodeName := os.Getenv("NODE_NAME")
 	if err != nil {
