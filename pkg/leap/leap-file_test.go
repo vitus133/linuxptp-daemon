@@ -44,3 +44,11 @@ func Test_GetLastLeapEventFromFile(t *testing.T) {
 	assert.Equal(t, 37, leap)
 	fmt.Println(td)
 }
+
+func Test_ParseLeapFile(t *testing.T) {
+	leapFile := "testdata/leap-seconds.list"
+	b, err := os.ReadFile(leapFile)
+	assert.Equal(t, nil, err)
+	_, err = ParseLeapFile(b)
+	assert.Equal(t, nil, err)
+}

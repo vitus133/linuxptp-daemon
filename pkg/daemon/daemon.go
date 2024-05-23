@@ -550,15 +550,18 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			var leapFile string
 			for _, section := range output.sections {
 				if section.sectionName == "[global]" {
+					section.options["leapfile"] = fmt.Sprintf("/etc/leap/%s", os.Getenv("NODE_NAME"))
 					lf, exists := section.options["leapfile"]
 					if exists {
 						leapFile = strings.ReplaceAll(lf, " ", "")
 					} else {
-						glog.Errorf("leap file is missing in ts2phc configuration file")
+						return fmt.Errorf("can't configure Leap file in ts2phc options")
 					}
 					break
 				}
 			}
+			// Write ts2phc.x.conf with leap-file path per node name
+			configOutput, _ = output.renderPtp4lConf()
 			dn.leapManager.SetLeapFile(leapFile)
 			gpsDaemon := &GPSD{
 				name:        GPSD_PROCESSNAME,

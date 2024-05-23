@@ -26,10 +26,9 @@ import (
 )
 
 type cliParams struct {
-	updateInterval    int
-	profileDir        string
-	pmcPollInterval   int
-	leapUserConfigDir string
+	updateInterval  int
+	profileDir      string
+	pmcPollInterval int
 }
 
 // Parse Command line flags
@@ -40,8 +39,6 @@ func flagInit(cp *cliParams) {
 		"profile to start linuxptp processes")
 	flag.IntVar(&cp.pmcPollInterval, "pmc-poll-interval", config.DefaultPmcPollInterval,
 		"Interval for periodical PMC poll")
-	flag.StringVar(&cp.leapUserConfigDir, "leap-user-config-path", config.DefaultLeapUserConfigPath,
-		"leap seconds user config")
 }
 
 func main() {
@@ -52,7 +49,6 @@ func main() {
 	glog.Infof("resync period set to: %d [s]", cp.updateInterval)
 	glog.Infof("linuxptp profile path set to: %s", cp.profileDir)
 	glog.Infof("pmc poll interval set to: %d [s]", cp.pmcPollInterval)
-	glog.Infof("LEAP: leap seconds user config path set to: %s", cp.leapUserConfigDir)
 
 	cfg, err := config.GetKubeConfig()
 	if err != nil {
@@ -114,7 +110,11 @@ func main() {
 	hwconfigs := []ptpv1.HwConfig{}
 	refreshNodePtpDevice := true
 	closeProcessManager := make(chan bool)
-	lm := leap.New(cp.leapUserConfigDir)
+	lm, err := leap.New(kubeClient, daemon.PtpNamespace)
+	if err != nil {
+		glog.Error("failed to initialize Leap manager, ", err)
+		return
+	}
 	go lm.Run()
 	defer close(lm.Close)
 	go daemon.New(

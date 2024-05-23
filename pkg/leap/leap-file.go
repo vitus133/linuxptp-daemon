@@ -1,7 +1,7 @@
 package leap
 
 import (
-	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,14 +12,18 @@ import (
 	leaphash "github.com/facebook/time/leaphash"
 	"github.com/golang/glog"
 	"github.com/openshift/linuxptp-daemon/pkg/ublox"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	userLeapFileName       = "leap-seconds.list"
+	defaultLeapFileName    = "leap-seconds.list"
+	defaultLeapFilePath    = "/usr/share/zoneinfo"
 	gpsLeapToUtcLeap       = 37 - 18
 	curreLsValidMask       = 0x1
 	timeToLsEventValidMask = 0x2
 	leapSourceGps          = 2
+	leapConfigMapName      = "leap-configmap"
 )
 
 type LeapManager struct {
@@ -29,23 +33,106 @@ type LeapManager struct {
 	Close chan bool
 	// ts2phc path of leap-seconds.list file
 	LeapFilePath string
-	// Path of base64 encoded user-provided leap-seconds.list file
-	UserLeapFilePath string
-	// LeapFileUpdateFromGpsEnabled - allow updating system leap file
-	// from GNSS TIMELS indication.
-	// Enabled by default and becomes disabled if leap-seconds.list file
-	// is created by user (through a configmap)
-	// It becomes re-enabled again when the user-provided leap-seconds.list is deleted
-	LeapFileUpdateFromGpsEnabled bool
+	// client
+	client    *kubernetes.Clientset
+	namespace string
+	// Leap file structure
+	leapFile LeapFile
 }
 
-func New(leapUserConfigDir string) *LeapManager {
-	return &LeapManager{
-		UbloxLsInd:                   make(chan ublox.TimeLs),
-		UserLeapFilePath:             leapUserConfigDir,
-		Close:                        make(chan bool),
-		LeapFileUpdateFromGpsEnabled: true,
+type LeapEvent struct {
+	LeapTime string `json:"leapTime"`
+	LeapSec  int    `json:"leapSec"`
+	Comment  string `json:"comment"`
+}
+type LeapFile struct {
+	ExpirationTime string      `json:"expirationTime"`
+	UpdateTime     string      `json:"updateTime"`
+	LeapEvents     []LeapEvent `json:"leapEvents"`
+	Hash           string      `json:"hash"`
+}
+
+func New(kubeclient *kubernetes.Clientset, namespace string) (*LeapManager, error) {
+	lm := &LeapManager{
+		UbloxLsInd: make(chan ublox.TimeLs),
+		Close:      make(chan bool),
+		client:     kubeclient,
+		namespace:  namespace,
+		leapFile:   LeapFile{},
 	}
+	err := lm.PopulateLeapData()
+	if err != nil {
+		return nil, err
+	}
+	return lm, nil
+}
+
+func ParseLeapFile(b []byte) (*LeapFile, error) {
+	var l = LeapFile{}
+	lines := strings.Split(string(b), "\n")
+	for i := 0; i < len(lines); i++ {
+		fields := strings.Fields(lines[i])
+		if strings.HasPrefix(lines[i], "#$") {
+			l.UpdateTime = fields[1]
+		} else if strings.HasPrefix(lines[i], "#@") {
+			l.ExpirationTime = fields[1]
+		} else if strings.HasPrefix(lines[i], "#h") {
+			l.Hash = strings.Join(fields[1:], " ")
+		} else if !strings.HasPrefix(lines[i], "#") {
+			if len(fields) < 2 {
+				// empty line
+				continue
+			}
+			sec, err := strconv.ParseInt(fields[1], 10, 8)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse Leap seconds %s value from file: %s, %v", fields[1], defaultLeapFileName, err)
+			}
+			ev := LeapEvent{
+				LeapTime: fields[0],
+				LeapSec:  int(sec),
+				Comment:  strings.Join(fields[2:], " "),
+			}
+			l.LeapEvents = append(l.LeapEvents, ev)
+		}
+	}
+	return &l, nil
+}
+
+func (l *LeapManager) PopulateLeapData() error {
+
+	cm, err := l.client.CoreV1().ConfigMaps(l.namespace).Get(context.TODO(), leapConfigMapName, metav1.GetOptions{})
+	nodeName := os.Getenv("NODE_NAME")
+	if err != nil {
+		return err
+	}
+	lf, found := cm.Data[nodeName]
+	if !found {
+		b, err := os.ReadFile(filepath.Join(defaultLeapFilePath, defaultLeapFileName))
+		if err != nil {
+			return err
+		}
+		leapData, err := ParseLeapFile(b)
+		if err != nil {
+			return err
+		}
+		l.leapFile = *leapData
+
+		if len(cm.Data) == 0 {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[nodeName] = string(b)
+		_, err = l.client.CoreV1().ConfigMaps(l.namespace).Update(context.TODO(), cm, metav1.UpdateOptions{})
+		if err != nil {
+			return err
+		}
+	} else {
+		leapData, err := ParseLeapFile([]byte(lf))
+		if err != nil {
+			return err
+		}
+		l.leapFile = *leapData
+	}
+	return nil
 }
 
 func (l *LeapManager) SetLeapFile(leapFile string) {
@@ -55,65 +142,14 @@ func (l *LeapManager) SetLeapFile(leapFile string) {
 
 func (l *LeapManager) Run() {
 	glog.Info("starting Leap file manager")
-	tickerPull := time.NewTicker(30 * time.Second)
-	defer tickerPull.Stop()
 	for {
 		select {
 		case v := <-l.UbloxLsInd:
 			l.HandleLeapIndication(&v)
-		case <-tickerPull.C:
-			glog.Info("Leap file check ticker")
-			if equal, uf := l.checkLeapFileDiff(); !equal && uf != nil {
-				glog.Info("user Leap file exists, valid and different from the system leap file: replacing the system leap file")
-				err := os.WriteFile(l.LeapFilePath, *uf, 0644)
-				if err != nil {
-					glog.Info("failed to update system Leap file")
-				}
-				l.LeapFileUpdateFromGpsEnabled = false
-			}
 		case <-l.Close:
 			return
 		}
 	}
-}
-
-// checkLeapFileDiff checks whether the user-provided leap seconds
-// file exists, valid and different from the system leap-seconds file
-func (l *LeapManager) checkLeapFileDiff() (bool, *[]byte) {
-	userFile := filepath.Join(l.UserLeapFilePath, userLeapFileName)
-	if _, err := os.Stat(userFile); err != nil {
-		glog.Info("no user Leap file provided")
-		l.LeapFileUpdateFromGpsEnabled = true
-		return false, nil
-	}
-	if err := CheckLeapFileIntegrity(userFile); err != nil {
-		glog.Info("Leap file integrity check error: ", err)
-		return false, nil
-	}
-	if _, err := os.Stat(l.LeapFilePath); err != nil {
-		glog.Info("system Leap file path is not yet initialized")
-		return false, nil
-	}
-	equal, uf, err := l.leapFilesEqual()
-	if err != nil {
-		glog.Info("failed to compare Leap files: ", err)
-		return false, nil
-	}
-	return equal, uf
-}
-
-func (l *LeapManager) leapFilesEqual() (bool, *[]byte, error) {
-	userFile := filepath.Join(l.UserLeapFilePath, userLeapFileName)
-	uf, err := os.ReadFile(userFile)
-	if err != nil {
-		return false, nil, err
-	}
-	sf, err := os.ReadFile(l.LeapFilePath)
-	if err != nil {
-		return false, nil, err
-	}
-	equal := bytes.Equal(uf, sf)
-	return equal, &uf, nil
 }
 
 func GetLastLeapEventFromFile(fp string) (*time.Time, int, error) {
@@ -172,7 +208,7 @@ func CheckLeapFileIntegrity(filePath string) error {
 	if strings.Compare(hash, hashOnFile) == 0 {
 		return nil
 	}
-	return fmt.Errorf("Leap file integrity error: %s - on file, %s - computed",
+	return fmt.Errorf("integrity error: %s - on Leap file, %s - computed",
 		hashOnFile, hash)
 }
 
@@ -237,10 +273,6 @@ func (l *LeapManager) HandleLeapIndication(data *ublox.TimeLs) {
 	glog.Infof("Leap indication: %+v", data)
 	if data.SrcOfCurrLs != leapSourceGps {
 		glog.Info("Discarding Leap event not opriginating from GPS")
-		return
-	}
-	if !l.LeapFileUpdateFromGpsEnabled {
-		glog.Info("Automatic Leap file update is disabled - user override found")
 		return
 	}
 	_, leapSecOnFile, err := GetLastLeapEventFromFile(l.LeapFilePath)
