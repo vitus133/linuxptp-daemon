@@ -220,10 +220,8 @@ func (l *LeapManager) RehashLeapData() {
 	for _, ev := range l.leapFile.LeapEvents {
 		data += fmt.Sprint(ev.LeapTime) + fmt.Sprint(ev.LeapSec)
 	}
-
 	// checksum
 	hash := fmt.Sprintf("%x", sha1.Sum([]byte(data)))
-
 	var groupedHash string
 	// group checksum by 8 characters
 	for i := 0; i < 5; i++ {

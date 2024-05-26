@@ -547,22 +547,15 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			if e := mkFifo(); e != nil {
 				glog.Errorf("Error creating named pipe, GNSS monitoring will not work as expected %s", e.Error())
 			}
-			var leapFile string
+
 			for _, section := range output.sections {
 				if section.sectionName == "[global]" {
 					section.options["leapfile"] = fmt.Sprintf("/etc/leap/%s", os.Getenv("NODE_NAME"))
-					lf, exists := section.options["leapfile"]
-					if exists {
-						leapFile = strings.ReplaceAll(lf, " ", "")
-					} else {
-						return fmt.Errorf("can't configure Leap file in ts2phc options")
-					}
 					break
 				}
 			}
 			// Write ts2phc.x.conf with leap-file path per node name
 			configOutput, _ = output.renderPtp4lConf()
-			dn.leapManager.SetLeapFile(leapFile)
 			gpsDaemon := &GPSD{
 				name:        GPSD_PROCESSNAME,
 				execMutex:   sync.Mutex{},
