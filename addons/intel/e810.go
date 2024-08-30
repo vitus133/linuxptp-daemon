@@ -115,7 +115,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 							glog.Error("e810 failed to read " + deviceDir + ": " + err.Error())
 							continue
 						}
-
+						var pinPath string
 						for _, phc := range phcs {
 							if strings.HasPrefix(pin, "SDP") {
 								pinPath = fmt.Sprintf("/sys/class/net/%s/device/ptp/%s/period", device, phc.Name())
