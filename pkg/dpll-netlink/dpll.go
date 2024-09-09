@@ -352,10 +352,7 @@ func ParsePinReplies(msgs []genetlink.Message) ([]*DoPinGetReply, error) {
 // DoPinGet wraps the "pin-get" operation:
 func (c *Conn) DoPinGet(req DoPinGetRequest) (*DoPinGetReply, error) {
 	ae := netlink.NewAttributeEncoder()
-	if req.Id != 0 {
-		ae.Uint32(DPLL_A_PIN_ID, req.Id)
-	}
-
+	ae.Uint32(DPLL_A_PIN_ID, req.Id)
 	b, err := ae.Encode()
 	if err != nil {
 		return nil, err
@@ -385,19 +382,11 @@ func (c *Conn) DoPinGet(req DoPinGetRequest) (*DoPinGetReply, error) {
 }
 
 func (c *Conn) DumpPinGet() ([]*DoPinGetReply, error) {
-	ae := netlink.NewAttributeEncoder()
-
-	b, err := ae.Encode()
-	if err != nil {
-		return nil, err
-	}
-
 	msg := genetlink.Message{
 		Header: genetlink.Header{
 			Command: DPLL_CMD_PIN_GET,
 			Version: c.f.Version,
 		},
-		Data: b,
 	}
 
 	msgs, err := c.c.Execute(msg, c.f.ID, netlink.Request|netlink.Dump)

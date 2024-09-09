@@ -101,12 +101,11 @@ func sendDelayCompensation(comp *[]delayCompensation) error {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
 	}
 	defer conn.Close()
-	pinReplies, err := conn.DumpPinGet()
-	if err != nil {
-		return fmt.Errorf("failed to dump DPLL pins: %v", err)
-	}
-	for _, pin := range pinReplies {
-
+	for id := 0; ; id++ {
+		pin, err := conn.DoPinGet(dpll.DoPinGetRequest{Id: uint32(id)})
+		if err != nil {
+			break // Done with all the pins
+		}
 		for _, dc := range *comp {
 			desiredClockId, err := strconv.ParseUint(dc.clockId, 10, 64)
 			if err != nil {
@@ -119,7 +118,6 @@ func sendDelayCompensation(comp *[]delayCompensation) error {
 						pin.BoardLabel, desiredClockId, err)
 				}
 				glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockId, dc.DelayPs)
-			} else {
 			}
 		}
 	}
