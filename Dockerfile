@@ -9,9 +9,10 @@ COPY ./extra/leap-seconds.list /usr/share/zoneinfo/leap-seconds.list
 
 RUN yum -y update && yum -y update glibc && yum --setopt=skip_missing_names_on_install=False -y install linuxptp ethtool hwdata  && yum clean all
 
-
 RUN yum install -y gpsd-minimal
 RUN yum install -y gpsd-minimal-clients
+
+COPY ./extra/ts2phc /usr/sbin/ts2phc
 
 # Create symlinks for executables to match references
 RUN ln -s /usr/bin/gpspipe /usr/local/bin/gpspipe
