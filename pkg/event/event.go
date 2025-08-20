@@ -19,6 +19,7 @@ import (
 	fbprotocol "github.com/facebook/time/ptp/protocol"
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/leap"
+	parserconstants "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser/constants"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -38,7 +39,7 @@ const (
 	//Status           ValueType = "status"
 	PHASE_STATUS              ValueType = "phase_status"
 	FREQUENCY_STATUS          ValueType = "frequency_status"
-	NMEA_STATUS               ValueType = "nmea_status"
+	NMEA_STATUS               ValueType = parserconstants.NmeaStatus
 	PROCESS_STATUS            ValueType = "process_status"
 	PPS_STATUS                ValueType = "pps_status"
 	LEADING_INTERFACE_UNKNOWN string    = "unknown"
