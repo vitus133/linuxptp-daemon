@@ -1031,6 +1031,9 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *PluginManager) {
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
+						if profileClockType == TBC {
+							p.tBCTransitionCheck(output, pm)
+						}
 						if strings.Contains(output, ClockClassChangeIndicator) {
 							go p.updateClockClass(nil)
 						} else if p.pmcCheck {
