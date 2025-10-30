@@ -1033,11 +1033,7 @@ func (e *EventHandler) GetData(cfgName string, processName EventSource) *Data {
 
 func (e *EventHandler) addEvent(event EventChannel) *DataDetails {
 	d := e.GetData(event.CfgName, event.ProcessName)
-	leadingIface := "NOT-SET-123"
-	if state, ok := e.clkSyncState[event.CfgName]; ok {
-		leadingIface = state.leadingIFace
-	}
-	d.AddEvent(event, leadingIface)
+	d.AddEvent(event)
 
 	// update if DPLL holdover is out of spec
 	e.updateSpecState(event)
