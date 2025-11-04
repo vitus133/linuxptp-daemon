@@ -57,8 +57,8 @@ const (
 )
 
 var (
-	haInDomainRegEx       = regexp.MustCompile("selecting ([\\w\\-]+) as domain source clock")
-	haOutDomainRegEx      = regexp.MustCompile("selecting ([\\w\\-]+) as out-of-domain source clock")
+	haInDomainRegEx       = regexp.MustCompile(`selecting ([\w\-]+) as domain source clock`)
+	haOutDomainRegEx      = regexp.MustCompile(`selecting ([\w\-]+) as out-of-domain source clock`)
 	messageTagSuffixRegEx = regexp.MustCompile(`([a-zA-Z0-9]+\.[a-zA-Z0-9]+\.config):[a-zA-Z0-9]+(:[a-zA-Z0-9]+)?`)
 	clockIDRegEx          = regexp.MustCompile(`\/dev\/ptp\d+`)
 )
@@ -1578,25 +1578,16 @@ func (p *ptpProcess) SyncEDeviceByName(name string) *synce.Config {
 	return nil
 }
 
-func containsAny(output string, indicators ...string) bool {
-	for _, indicator := range indicators {
-		if strings.Contains(output, indicator) {
-			return true
-		}
-	}
-	return false
-}
-
 func (dn *Daemon) stopAllProcesses() {
 	for _, p := range dn.processManager.process {
 		if p != nil {
 			glog.Infof("stopping process.... %s", p.name)
-
 			// Stop dependencies in reverse order first
 			if p.depProcess != nil {
 				for i := len(p.depProcess) - 1; i >= 0; i-- {
 					d := p.depProcess[i]
 					if d != nil {
+						glog.Info("Stopping %s", d.Name())
 						d.CmdStop()
 						d = nil
 					}
@@ -1604,6 +1595,7 @@ func (dn *Daemon) stopAllProcesses() {
 			}
 
 			// Stop parent process
+			glog.Info("Stopping %s", p.name)
 			p.cmdStop()
 			p.depProcess = nil
 			p.hasCollectedMetrics = false
@@ -1615,6 +1607,7 @@ func (dn *Daemon) stopAllProcesses() {
 				deleteSyncEMetrics(p.name, p.configName, p.syncERelations)
 			}
 
+			glog.Info("Stopped %s ", p.name)
 			p = nil
 		}
 	}
