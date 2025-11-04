@@ -51,7 +51,7 @@ type delayCompensation struct {
 	pinLabel  string
 	iface     string
 	direction string
-	clockID   uint64
+	clockID   string
 }
 
 var hardware = map[string]string{
@@ -99,10 +99,7 @@ func InitInternalDelays(part string) (*InternalDelays, error) {
 	return nil, fmt.Errorf("can't find delays for %s", part)
 }
 
-// SendDelayCompensation is a function variable for mocking in tests
-var SendDelayCompensation = sendDelayCompensation
-
-func sendDelayCompensation(comp *[]delayCompensation, pins DPLLPins) error {
+func sendDelayCompensation(comp *[]delayCompensation, DpllPins []*dpll.PinInfo) error {
 	glog.Info(comp)
 	conn, err := dpll.Dial(nil)
 	if err != nil {
@@ -111,29 +108,33 @@ func sendDelayCompensation(comp *[]delayCompensation, pins DPLLPins) error {
 	//nolint:errcheck
 	defer conn.Close()
 
-	for _, dc := range *comp {
-		pin := pins.GetByLabel(dc.pinLabel, dc.clockID)
-		if pin == nil {
-			glog.Warningf("pin %s not found for clock ID %d; skipping phase adjustment", dc.pinLabel, dc.clockID)
-			continue
+	for _, pin := range DpllPins {
+		for _, dc := range *comp {
+			var desiredClockID uint64
+			desiredClockID, err = strconv.ParseUint(dc.clockID, 10, 64)
+			if err != nil {
+				return fmt.Errorf("failed to parse clock id %s: %v", dc.clockID, err)
+			}
+			if desiredClockID == pin.ClockID && strings.EqualFold(pin.BoardLabel, dc.pinLabel) {
+				err = conn.PinPhaseAdjust(dpll.PinPhaseAdjustRequest{ID: pin.ID, PhaseAdjust: dc.DelayPs})
+				if err != nil {
+					return fmt.Errorf("failed to send phase adjustment to %s clock id %d: %v",
+						pin.BoardLabel, desiredClockID, err)
+				}
+				glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockID, dc.DelayPs)
+			}
 		}
-		err = conn.PinPhaseAdjust(dpll.PinPhaseAdjustRequest{ID: pin.ID, PhaseAdjust: dc.DelayPs})
-		if err != nil {
-			return fmt.Errorf("failed to send phase adjustment to %s clock id %d: %v",
-				pin.BoardLabel, dc.clockID, err)
-		}
-		glog.Infof("set phaseAdjust of pin %s at clock ID %x to %d ps", pin.BoardLabel, pin.ClockID, dc.DelayPs)
 	}
 	return nil
 }
 
-func addClockID(iface string, nodeProfile *ptpv1.PtpProfile) (uint64, error) {
+func addClockID(iface string, nodeProfile *ptpv1.PtpProfile) (*string, error) {
 	dpllClockIDStr := fmt.Sprintf("clockId[%s]", iface)
-	clockIDStr, found := (*nodeProfile).PtpSettings[dpllClockIDStr]
+	clockID, found := (*nodeProfile).PtpSettings[dpllClockIDStr]
 	if !found {
-		return 0, fmt.Errorf("plugin E810 error: can't find clock ID for interface %s - are all pins configured?", iface)
+		return nil, fmt.Errorf("plugin E810 error: can't find clock ID for interface %s - are all pins configured?", iface)
 	}
-	return strconv.ParseUint(clockIDStr, 10, 64)
+	return &clockID, nil
 }
 
 func findInternalLink(links []InternalLink, connector string) *InternalLink {

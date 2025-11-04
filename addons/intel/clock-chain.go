@@ -3,6 +3,9 @@ package intel
 import (
 	"errors"
 	"fmt"
+	"os"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/golang/glog"
@@ -11,49 +14,48 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-type (
-	// ClockChainType represents the type of clock chain
-	ClockChainType int
+// FileSystemInterface defines the interface for filesystem operations to enable mocking
+type FileSystemInterface interface {
+	ReadDir(dirname string) ([]os.DirEntry, error)
+	WriteFile(filename string, data []byte, perm os.FileMode) error
+}
 
-	// ClockChain represents a set of interrelated clocks
-	ClockChain struct {
-		Type       ClockChainType `json:"clockChainType"`
-		LeadingNIC CardInfo       `json:"LeadingNIC"`
-		OtherNICs  []CardInfo     `json:"otherNICs,omitempty"`
-		DpllPins   DPLLPins       `json:"dpllPins"`
-	}
+// RealFileSystem implements FileSystemInterface using real OS operations
+type RealFileSystem struct{}
 
-	// ClockChainInterface is the mockable public interface of the ClockChain
-	ClockChainInterface interface {
-		EnterNormalTBC() error
-		EnterHoldoverTBC() error
-		SetPinDefaults() error
-		GetLeadingNIC() CardInfo
-	}
+// ReadDir reads the contents of the directory specified by dirname
+func (fs *RealFileSystem) ReadDir(dirname string) ([]os.DirEntry, error) {
+	return os.ReadDir(dirname)
+}
 
-	// CardInfo represents an individual card in the clock chain
-	CardInfo struct {
-		Name        string `json:"name"`
-		DpllClockID uint64 `json:"dpllClockId"`
-		// upstreamPort specifies the slave port in the T-BC case. For example, if the "name"
-		// 	is ens4f0, the "upstreamPort" could be ens4f1, depending on ptp4l config
-		UpstreamPort string `json:"upstreamPort"`
-		// Pins         map[string]dpll.PinInfo `json:"pins"`
-	}
+// WriteFile writes the data to the file specified by filename
+func (fs *RealFileSystem) WriteFile(filename string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(filename, data, perm)
+}
 
-	// PhaseInputsProvider abstracts access to PhaseInputs so InitClockChain can
-	// accept different option structs (e.g., E810Opts, E825Opts)
-	PhaseInputsProvider interface {
-		GetPhaseInputs() []PhaseInputs
-	}
-)
+// Default filesystem implementation
+var filesystem FileSystemInterface = &RealFileSystem{}
+
+type ClockChainType int
+type ClockChain struct {
+	Type       ClockChainType  `json:"clockChainType"`
+	LeadingNIC CardInfo        `json:"leadingNIC"`
+	OtherNICs  []CardInfo      `json:"otherNICs,omitempty"`
+	DpllPins   []*dpll.PinInfo `json:"dpllPins"`
+}
+type CardInfo struct {
+	Name        string `json:"name"`
+	DpllClockID string `json:"dpllClockId"`
+	// upstreamPort specifies the slave port in the T-BC case. For example, if the "name"
+	// 	is ens4f0, the "upstreamPort" could be ens4f1, depending on ptp4l config
+	UpstreamPort string                  `json:"upstreamPort"`
+	Pins         map[string]dpll.PinInfo `json:"pins"`
+}
 
 const (
 	ClockTypeUnset ClockChainType = iota
 	ClockTypeTGM
 	ClockTypeTBC
-)
-const (
 	PriorityEnabled  = 0
 	PriorityDisabled = 255
 )
@@ -86,29 +88,41 @@ type PinParentControl struct {
 	PpsPriority    uint8
 	EecOutputState uint8
 	PpsOutputState uint8
-	EecDirection   *uint8
-	PpsDirection   *uint8
 }
 type PinControl struct {
 	Label         string
 	ParentControl PinParentControl
 }
 
-// GetLeadingNIC returns the leading NIC from the clock chain
-func (c *ClockChain) GetLeadingNIC() CardInfo {
-	return c.LeadingNIC
+var configurablePins = []string{sdp20, sdp21, sdp22, sdp23, gnss, sma1Input, sma2Input, c8270Rclka, c8270Rclkb}
+
+func (c *ClockChain) getLiveDpllPinsInfo() error {
+	if !unitTest {
+		conn, err := dpll.Dial(nil)
+		if err != nil {
+			return fmt.Errorf("failed to dial DPLL: %v", err)
+		}
+		//nolint:errcheck
+		defer conn.Close()
+		c.DpllPins, err = conn.DumpPinGet()
+		if err != nil {
+			return fmt.Errorf("failed to dump DPLL pins: %v", err)
+		}
+	} else {
+		c.DpllPins = DpllPins
+	}
+	return nil
 }
 
-func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
+func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
 	compensations := []delayCompensation{}
-	for _, card := range opts.GetPhaseInputs() {
+	var clockID *string
+	for _, card := range e810Opts.PhaseInputs {
 		delays, err := InitInternalDelays(card.Part)
 		if err != nil {
 			return nil, err
 		}
 		glog.Infof("card: %+v", card)
-		var clockID uint64
-
 		if !card.GnssInput && card.UpstreamPort == "" {
 			externalDelay := card.Input.DelayPs
 			connector := card.Input.Connector
@@ -125,26 +139,29 @@ func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfi
 			if err != nil {
 				return nil, err
 			}
+
 			compensations = append(compensations, delayCompensation{
 				DelayPs:   int32(externalDelay) + internalDelay,
 				pinLabel:  pinLabel,
 				iface:     card.ID,
 				direction: "input",
-				clockID:   clockID,
+				clockID:   *clockID,
 			})
 			// Track non-leading NICs
 			c.OtherNICs = append(c.OtherNICs, CardInfo{
 				Name:         card.ID,
-				DpllClockID:  clockID,
+				DpllClockID:  *clockID,
 				UpstreamPort: card.UpstreamPort,
+				Pins:         make(map[string]dpll.PinInfo, 0),
 			})
 		} else {
 			c.LeadingNIC.Name = card.ID
 			c.LeadingNIC.UpstreamPort = card.UpstreamPort
-			c.LeadingNIC.DpllClockID, err = addClockID(card.ID, nodeProfile)
+			clockID, err = addClockID(card.ID, nodeProfile)
 			if err != nil {
 				return nil, err
 			}
+			c.LeadingNIC.DpllClockID = *clockID
 			if card.GnssInput {
 				c.Type = ClockTypeTGM
 				gnssLink := &delays.GnssInput
@@ -153,7 +170,7 @@ func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfi
 					pinLabel:  gnssLink.Pin,
 					iface:     card.ID,
 					direction: "input",
-					clockID:   c.LeadingNIC.DpllClockID,
+					clockID:   *clockID,
 				})
 			} else {
 				// if no GNSS and no external, then ptp4l input
@@ -174,48 +191,59 @@ func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfi
 				pinLabel:  link.Pin,
 				iface:     card.ID,
 				direction: "output",
-				clockID:   clockID,
+				clockID:   *clockID,
 			})
 		}
 	}
 	return &compensations, nil
 }
 
-// InitClockChain initializes the ClockChain struct based on live DPLL pin info
-func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
-	chain := &ClockChain{
-		LeadingNIC: CardInfo{},
-		OtherNICs:  make([]CardInfo, 0),
-		DpllPins:   DpllPins,
+func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
+	var chain = &ClockChain{
+		LeadingNIC: CardInfo{
+			Pins: make(map[string]dpll.PinInfo, 0),
+		},
+		OtherNICs: make([]CardInfo, 0),
 	}
 
-	err := chain.DpllPins.FetchPins()
+	err := chain.getLiveDpllPinsInfo()
 	if err != nil {
 		return chain, err
 	}
 
-	comps, err := chain.resolveInterconnections(opts, nodeProfile)
+	comps, err := chain.resolveInterconnections(e810Opts, nodeProfile)
 	if err != nil {
 		glog.Errorf("fail to get delay compensations, %s", err)
 	}
-	err = SendDelayCompensation(comps, chain.DpllPins)
+	if !unitTest {
+		err = sendDelayCompensation(comps, chain.DpllPins)
+		if err != nil {
+			glog.Errorf("fail to send delay compensations, %s", err)
+		}
+	}
+	err = chain.getLeadingCardSDP()
 	if err != nil {
-		glog.Errorf("fail to send delay compensations, %s", err)
+		return chain, err
+	}
+	// Populate pins for other NICs, if any
+	err = chain.getOtherCardsSDP()
+	if err != nil {
+		return chain, err
 	}
 	glog.Info("about to set DPLL pin priorities to defaults")
-	err = chain.SetPinDefaults()
+	_, err = chain.SetPinDefaults()
 	if err != nil {
 		return chain, err
 	}
 	if chain.Type == ClockTypeTBC {
 		(*nodeProfile).PtpSettings["clockType"] = "T-BC"
 		glog.Info("about to init TBC pins")
-		err = chain.InitPinsTBC()
+		_, err = chain.InitPinsTBC()
 		if err != nil {
 			return chain, fmt.Errorf("failed to initialize pins for T-BC operation: %s", err.Error())
 		}
 		glog.Info("about to enter TBC Normal mode")
-		err = chain.EnterNormalTBC()
+		_, err = chain.EnterNormalTBC()
 		if err != nil {
 			return chain, fmt.Errorf("failed to enter T-BC normal mode: %s", err.Error())
 		}
@@ -223,95 +251,109 @@ func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*C
 	return chain, err
 }
 
+func (c *ClockChain) getLeadingCardSDP() error {
+	clockID, err := strconv.ParseUint(c.LeadingNIC.DpllClockID, 10, 64)
+	if err != nil {
+		return err
+	}
+	for _, pin := range c.DpllPins {
+		if pin.ClockID == clockID && slices.Contains(configurablePins, pin.BoardLabel) {
+			c.LeadingNIC.Pins[pin.BoardLabel] = *pin
+		}
+	}
+	return nil
+}
+
+// getOtherCardsSDP populates configurable pins for all non-leading NICs
+func (c *ClockChain) getOtherCardsSDP() error {
+	if len(c.OtherNICs) == 0 {
+		return nil
+	}
+	for idx := range c.OtherNICs {
+		clockID, err := strconv.ParseUint(c.OtherNICs[idx].DpllClockID, 10, 64)
+		if err != nil {
+			return err
+		}
+		for _, pin := range c.DpllPins {
+			if pin.ClockID == clockID && slices.Contains(configurablePins, pin.BoardLabel) {
+				if c.OtherNICs[idx].Pins == nil {
+					c.OtherNICs[idx].Pins = make(map[string]dpll.PinInfo, 0)
+				}
+				c.OtherNICs[idx].Pins[pin.BoardLabel] = *pin
+			}
+		}
+	}
+	return nil
+}
+
 func writeSysFs(path string, val string) error {
 	glog.Infof("writing " + val + " to " + path)
-	err := filesystem.WriteFile(path, []byte(val), 0o666)
+	err := filesystem.WriteFile(path, []byte(val), 0666)
 	if err != nil {
 		return fmt.Errorf("e810 failed to write " + val + " to " + path + ": " + err.Error())
 	}
 	return nil
 }
 
-// SetPinsControl builds DPLL netlink commands for the given pins on the leading NIC.
-func (c *ClockChain) SetPinsControl(pins []PinControl) ([]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) SetPinsControl(pins []PinControl) (*[]dpll.PinParentDeviceCtl, error) {
 	pinCommands := []dpll.PinParentDeviceCtl{}
 	for _, pinCtl := range pins {
-		dpllPin := c.DpllPins.GetByLabel(pinCtl.Label, c.LeadingNIC.DpllClockID)
-		if dpllPin == nil {
-			glog.Errorf("pin not found with label %s for clockID %d", pinCtl.Label, c.LeadingNIC.DpllClockID)
+		dpllPin, found := c.LeadingNIC.Pins[pinCtl.Label]
+		if !found {
+			glog.Errorf("%s pin not found in the card", pinCtl.Label)
 			continue
 		}
-		pinCommands = append(pinCommands, SetPinControlData(*dpllPin, pinCtl.ParentControl)...)
+		pinCommand := SetPinControlData(dpllPin, pinCtl.ParentControl)
+		pinCommands = append(pinCommands, *pinCommand)
 	}
-	return pinCommands, nil
+	return &pinCommands, nil
 }
 
 // SetPinsControlForAllNICs sets pins across all NICs (leading + other NICs)
 // This is used specifically for initialization functions like SetPinDefaults
-func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) ([]dpll.PinParentDeviceCtl, error) {
+func (c *ClockChain) SetPinsControlForAllNICs(pins []PinControl) (*[]dpll.PinParentDeviceCtl, error) {
 	pinCommands := []dpll.PinParentDeviceCtl{}
-	errs := make([]error, 0)
 
 	for _, pinCtl := range pins {
-		foundPins := c.DpllPins.GetAllPinsByLabel(pinCtl.Label)
-		if len(foundPins) == 0 && pinCtl.Label == sma2Input {
-			pinCtl.Label = sma2
-			foundPins = c.DpllPins.GetAllPinsByLabel(pinCtl.Label)
+		// Search for the pin across all NICs
+		found := false
+
+		// Check leading NIC first
+		if pin, exists := c.LeadingNIC.Pins[pinCtl.Label]; exists {
+			pinCommand := SetPinControlData(pin, pinCtl.ParentControl)
+			pinCommands = append(pinCommands, *pinCommand)
+			found = true
 		}
-		if len(foundPins) == 0 {
-			errs = append(errs, fmt.Errorf("pin %s not found on any nic", pinCtl.Label))
-			continue
+
+		// Check all other NICs
+		for _, nic := range c.OtherNICs {
+			if pin, exists := nic.Pins[pinCtl.Label]; exists {
+				pinCommand := SetPinControlData(pin, pinCtl.ParentControl)
+				pinCommands = append(pinCommands, *pinCommand)
+				found = true
+			}
 		}
-		for _, pin := range foundPins {
-			pinCommands = append(pinCommands, SetPinControlData(*pin, pinCtl.ParentControl)...)
+
+		if !found {
+			return nil, fmt.Errorf("%s pin not found in any NIC", pinCtl.Label)
 		}
 	}
 
-	return pinCommands, errors.Join(errs...)
+	return &pinCommands, nil
 }
 
-// buildDirectionCmd checks if any parent device direction is changing.
-// If so, it returns a direction-only command and updates pin.ParentDevice
-// directions in place. Returns nil if no direction change is needed.
-// The kernel rejects combining direction changes with prio/state.
-func buildDirectionCmd(pin *dpll.PinInfo, control PinParentControl) *dpll.PinParentDeviceCtl {
-	var cmd *dpll.PinParentDeviceCtl
-
-	for i, parentDevice := range pin.ParentDevice {
-		var direction *uint32
-		switch i {
-		case eecDpllIndex:
-			if control.EecDirection != nil {
-				v := uint32(*control.EecDirection)
-				direction = &v
-			}
-		case ppsDpllIndex:
-			if control.PpsDirection != nil {
-				v := uint32(*control.PpsDirection)
-				direction = &v
-			}
-		}
-		if direction != nil && *direction != parentDevice.Direction && pin.Capabilities&dpll.PinCapDir != 0 {
-			if cmd == nil {
-				cmd = &dpll.PinParentDeviceCtl{ID: pin.ID}
-			}
-			cmd.PinParentCtl = append(cmd.PinParentCtl,
-				dpll.PinControl{PinParentID: parentDevice.ParentID, Direction: direction})
-			pin.ParentDevice[i].Direction = *direction
-		}
+func SetPinControlData(pin dpll.PinInfo, control PinParentControl) *dpll.PinParentDeviceCtl {
+	Pin := dpll.PinParentDeviceCtl{
+		ID:           pin.ID,
+		PinParentCtl: make([]dpll.PinControl, 0),
 	}
-	return cmd
-}
 
-// SetPinControlData builds DPLL netlink commands to configure a pin's parent devices.
-func SetPinControlData(pin dpll.PinInfo, control PinParentControl) []dpll.PinParentDeviceCtl {
-	dirCmd := buildDirectionCmd(&pin, control)
-
-	cmd := dpll.PinParentDeviceCtl{ID: pin.ID}
-	for i, parentDevice := range pin.ParentDevice {
-		var prio, outputState uint32
-
-		switch i {
+	for deviceIndex, parentDevice := range pin.ParentDevice {
+		var prio uint32
+		var outputState uint32
+		pc := dpll.PinControl{}
+		pc.PinParentID = parentDevice.ParentID
+		switch deviceIndex {
 		case eecDpllIndex:
 			prio = uint32(control.EecPriority)
 			outputState = uint32(control.EecOutputState)
@@ -319,26 +361,14 @@ func SetPinControlData(pin dpll.PinInfo, control PinParentControl) []dpll.PinPar
 			prio = uint32(control.PpsPriority)
 			outputState = uint32(control.PpsOutputState)
 		}
-
-		pc := dpll.PinControl{PinParentID: parentDevice.ParentID}
 		if parentDevice.Direction == dpll.PinDirectionInput {
-			if pin.Capabilities&dpll.PinCapState != 0 {
-				selectable := uint32(dpll.PinStateSelectable)
-				pc.State = &selectable
-			}
-			if parentDevice.Prio != nil && pin.Capabilities&dpll.PinCapPrio != 0 {
-				pc.Prio = &prio
-			}
-		} else if pin.Capabilities&dpll.PinCapState != 0 {
+			pc.Prio = &prio
+		} else {
 			pc.State = &outputState
 		}
-		cmd.PinParentCtl = append(cmd.PinParentCtl, pc)
+		Pin.PinParentCtl = append(Pin.PinParentCtl, pc)
 	}
-
-	if dirCmd != nil {
-		return []dpll.PinParentDeviceCtl{*dirCmd, cmd}
-	}
-	return []dpll.PinParentDeviceCtl{cmd}
+	return &Pin
 }
 
 func (c *ClockChain) EnableE810Outputs() error {
@@ -361,24 +391,13 @@ func (c *ClockChain) EnableE810Outputs() error {
 		glog.Error(e)
 		return errors.New(e)
 	}
-	if hasSysfsSMAPins(c.LeadingNIC.Name) {
-		err = pinConfig.applyPinSet(c.LeadingNIC.Name, pinSet{"SMA2": "2 2"})
-		if err != nil {
-			glog.Errorf("failed to set SMA2 pin via sysfs: %s", err)
-		}
-	} else {
-		// This is to assign channel 2 to SDP22. The period command below will fail without it
-		err = pinConfig.applyPinSet(c.LeadingNIC.Name, pinSet{"SDP22": "2 2"})
-		if err != nil {
-			glog.Errorf("failed to set SDP22 pin via sysfs: %s", err)
-		}
-		sma2Cmds := c.DpllPins.GetCommandsForPluginPinSet(c.LeadingNIC.DpllClockID, map[string]string{"SMA2": "2 2"})
-		err = c.DpllPins.ApplyPinCommands(sma2Cmds)
-		if err != nil {
-			glog.Errorf("failed to set SMA2 pin to output: %s", err)
-		}
+	// Enable SMA2 output as a workaround for https://issues.redhat.com/browse/RHEL-110297
+	smaPath := fmt.Sprintf("%s%s/pins/%s", deviceDir, phcs[0].Name(), sma2)
+	err = writeSysFs(smaPath, "2 2")
+	if err != nil {
+		glog.Errorf("failed to write 2 2 to %s: %v", smaPath, err)
+		return err
 	}
-
 	pinPath = fmt.Sprintf("%s%s/period", deviceDir, phcs[0].Name())
 	err = writeSysFs(pinPath, sdp22PpsEnable)
 	if err != nil {
@@ -389,12 +408,12 @@ func (c *ClockChain) EnableE810Outputs() error {
 }
 
 // InitPinsTBC initializes the leading card E810 and DPLL pins for T-BC operation
-func (c *ClockChain) InitPinsTBC() error {
+func (c *ClockChain) InitPinsTBC() (*[]dpll.PinParentDeviceCtl, error) {
 	// Enable 1PPS output on SDP22
 	// (To synchronize the DPLL1 to the E810 PHC synced by ptp4l):
 	err := c.EnableE810Outputs()
 	if err != nil {
-		return fmt.Errorf("failed to enable E810 outputs: %w", err)
+		glog.Error("failed to enable E810 outputs: ", err)
 	}
 	// Disable GNSS-1PPS (all cards), SDP20 and SDP21
 	commandsGnss, err := c.SetPinsControlForAllNICs([]PinControl{
@@ -443,16 +462,12 @@ func (c *ClockChain) InitPinsTBC() error {
 	if err != nil {
 		glog.Error("failed to set pins control: ", err)
 	}
-	commands = append(commands, commandsGnss...)
-
-	err = BatchPinSet(commands)
-	// even if there was an error we still need to refresh the pin state.
-	fetchErr := c.DpllPins.FetchPins()
-	return errors.Join(err, fetchErr)
+	*commands = append(*commands, *commandsGnss...)
+	return commands, BatchPinSet(commands)
 }
 
 // EnterHoldoverTBC configures the leading card DPLL pins for T-BC holdover
-func (c *ClockChain) EnterHoldoverTBC() error {
+func (c *ClockChain) EnterHoldoverTBC() (*[]dpll.PinParentDeviceCtl, error) {
 	// Disable DPLL inputs from e810 (SDP22)
 	// Enable DPLL Outputs to e810 (SDP21, SDP23)
 	commands, err := c.SetPinsControl([]PinControl{
@@ -472,16 +487,13 @@ func (c *ClockChain) EnterHoldoverTBC() error {
 		},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	err = BatchPinSet(commands)
-	// even if there was an error we still need to refresh the pin state.
-	fetchErr := c.DpllPins.FetchPins()
-	return errors.Join(err, fetchErr)
+	return commands, BatchPinSet(commands)
 }
 
 // EnterNormalTBC configures the leading card DPLL pins for regular T-BC operation
-func (c *ClockChain) EnterNormalTBC() error {
+func (c *ClockChain) EnterNormalTBC() (*[]dpll.PinParentDeviceCtl, error) {
 	// Disable DPLL Outputs to e810 (SDP23, SDP21)
 	// Enable DPLL inputs from e810 (SDP22)
 	commands, err := c.SetPinsControl([]PinControl{
@@ -501,16 +513,13 @@ func (c *ClockChain) EnterNormalTBC() error {
 		},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	err = BatchPinSet(commands)
-	// even if there was an error we still need to refresh the pin state.
-	fetchErr := c.DpllPins.FetchPins()
-	return errors.Join(err, fetchErr)
+	return commands, BatchPinSet(commands)
 }
 
 // SetPinDefaults initializes DPLL pins to default recommended values
-func (c *ClockChain) SetPinDefaults() error {
+func (c *ClockChain) SetPinDefaults() (*[]dpll.PinParentDeviceCtl, error) {
 	// DPLL Priority List:
 	//
 	//	Recommended | Pin Index | EEC-DPLL0                    | PPS-DPLL1
@@ -526,7 +535,7 @@ func (c *ClockChain) SetPinDefaults() error {
 	//	8           | 2         | Recovered CLK1 (C827_0-RCLKA) | Recovered CLK1 (C827_0-RCLKA)
 	//	9           | 3         | Recovered CLK2 (C827_0-RCLKB) | Recovered CLK2 (C827_0-RCLKB)
 	//	10          | --        | OCXO                         | OCXO
-	d := uint8(dpll.PinDirectionInput)
+
 	// Also, Enable DPLL Outputs to e810 (SDP21, SDP23)
 	commands, err := c.SetPinsControlForAllNICs([]PinControl{
 		{
@@ -539,19 +548,15 @@ func (c *ClockChain) SetPinDefaults() error {
 		{
 			Label: sma1Input,
 			ParentControl: PinParentControl{
-				EecPriority:  3,
-				PpsPriority:  3,
-				EecDirection: &d,
-				PpsDirection: &d,
+				EecPriority: 3,
+				PpsPriority: 3,
 			},
 		},
 		{
 			Label: sma2Input,
 			ParentControl: PinParentControl{
-				EecPriority:  2,
-				PpsPriority:  2,
-				EecDirection: &d,
-				PpsDirection: &d,
+				EecPriority: 2,
+				PpsPriority: 2,
 			},
 		},
 		{
@@ -598,26 +603,23 @@ func (c *ClockChain) SetPinDefaults() error {
 		},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	err = BatchPinSet(commands)
-	// even if there was an error we still need to refresh the pin state.
-	fetchErr := c.DpllPins.FetchPins()
-	return errors.Join(err, fetchErr)
+	return commands, BatchPinSet(commands)
 }
 
-// BatchPinSet function pointer allows mocking of BatchPinSet
-var BatchPinSet = batchPinSet
-
-func batchPinSet(commands []dpll.PinParentDeviceCtl) error {
+func BatchPinSet(commands *[]dpll.PinParentDeviceCtl) error {
+	if unitTest {
+		return nil
+	}
 	conn, err := dpll.Dial(nil)
 	if err != nil {
 		return fmt.Errorf("failed to dial DPLL: %v", err)
 	}
 	//nolint:errcheck
 	defer conn.Close()
-	for _, command := range commands {
-		glog.Infof("DPLL pin command %s", command.String())
+	for _, command := range *commands {
+		glog.Infof("DPLL pin command %#v", command)
 		b, err := dpll.EncodePinControl(command)
 		if err != nil {
 			return err
