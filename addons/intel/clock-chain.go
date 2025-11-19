@@ -13,22 +13,42 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
+type (
+	// ClockChainType represents the type of clock chain
+	ClockChainType int
 
-type ClockChainType int
-type ClockChain struct {
-	Type       ClockChainType  `json:"clockChainType"`
-	LeadingNIC CardInfo        `json:"leadingNIC"`
-	OtherNICs  []CardInfo      `json:"otherNICs,omitempty"`
-	DpllPins   []*dpll.PinInfo `json:"dpllPins"`
-}
-type CardInfo struct {
-	Name        string `json:"name"`
-	DpllClockID string `json:"dpllClockId"`
-	// upstreamPort specifies the slave port in the T-BC case. For example, if the "name"
-	// 	is ens4f0, the "upstreamPort" could be ens4f1, depending on ptp4l config
-	UpstreamPort string                  `json:"upstreamPort"`
-	Pins         map[string]dpll.PinInfo `json:"pins"`
-}
+	// ClockChain represents a set of interrelated clocks
+	ClockChain struct {
+		Type       ClockChainType  `json:"clockChainType"`
+		LeadingNIC CardInfo        `json:"LeadingNIC"`
+		OtherNICs  []CardInfo      `json:"otherNICs,omitempty"`
+		DpllPins   []*dpll.PinInfo `json:"dpllPins"`
+	}
+
+	// ClockChainInterface is the mockable public interface of the ClockChain
+	ClockChainInterface interface {
+		EnterNormalTBC() error
+		EnterHoldoverTBC() error
+		SetPinDefaults() error
+		GetLeadingNIC() CardInfo
+	}
+
+	// CardInfo represents an individual card in the clock chain
+	CardInfo struct {
+		Name        string `json:"name"`
+		DpllClockID string `json:"dpllClockId"`
+		// upstreamPort specifies the slave port in the T-BC case. For example, if the "name"
+		// 	is ens4f0, the "upstreamPort" could be ens4f1, depending on ptp4l config
+		UpstreamPort string                  `json:"upstreamPort"`
+		Pins         map[string]dpll.PinInfo `json:"pins"`
+	}
+
+	// PhaseInputsProvider abstracts access to PhaseInputs so InitClockChain can
+	// accept different option structs (e.g., E810Opts, E825Opts)
+	PhaseInputsProvider interface {
+		GetPhaseInputs() []PhaseInputs
+	}
+)
 
 const (
 	ClockTypeUnset ClockChainType = iota
@@ -74,6 +94,11 @@ type PinControl struct {
 
 var configurablePins = []string{sdp20, sdp21, sdp22, sdp23, gnss, sma1Input, sma2Input, c8270Rclka, c8270Rclkb}
 
+// GetLeadingNIC returns the leading NIC from the clock chain
+func (c *ClockChain) GetLeadingNIC() CardInfo {
+	return c.LeadingNIC
+}
+
 func (c *ClockChain) getLiveDpllPinsInfo() error {
 	if !unitTest {
 		conn, err := dpll.Dial(nil)
@@ -92,10 +117,10 @@ func (c *ClockChain) getLiveDpllPinsInfo() error {
 	return nil
 }
 
-func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
+func (c *ClockChain) resolveInterconnections(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*[]delayCompensation, error) {
 	compensations := []delayCompensation{}
 	var clockID *string
-	for _, card := range e810Opts.PhaseInputs {
+	for _, card := range opts.GetPhaseInputs() {
 		delays, err := InitInternalDelays(card.Part)
 		if err != nil {
 			return nil, err
@@ -176,8 +201,9 @@ func (c *ClockChain) resolveInterconnections(e810Opts E810Opts, nodeProfile *ptp
 	return &compensations, nil
 }
 
-func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
-	var chain = &ClockChain{
+// InitClockChain initializes the ClockChain struct based on live DPLL pin info
+func InitClockChain(opts PhaseInputsProvider, nodeProfile *ptpv1.PtpProfile) (*ClockChain, error) {
+	chain := &ClockChain{
 		LeadingNIC: CardInfo{
 			Pins: make(map[string]dpll.PinInfo, 0),
 		},
@@ -189,7 +215,7 @@ func InitClockChain(e810Opts E810Opts, nodeProfile *ptpv1.PtpProfile) (*ClockCha
 		return chain, err
 	}
 
-	comps, err := chain.resolveInterconnections(e810Opts, nodeProfile)
+	comps, err := chain.resolveInterconnections(opts, nodeProfile)
 	if err != nil {
 		glog.Errorf("fail to get delay compensations, %s", err)
 	}
@@ -261,7 +287,7 @@ func (c *ClockChain) getOtherCardsSDP() error {
 
 func writeSysFs(path string, val string) error {
 	glog.Infof("writing " + val + " to " + path)
-	err := filesystem.WriteFile(path, []byte(val), 0666)
+	err := filesystem.WriteFile(path, []byte(val), 0o666)
 	if err != nil {
 		return fmt.Errorf("e810 failed to write "+val+" to "+path+": %v", err.Error())
 	}
@@ -402,7 +428,6 @@ func (c *ClockChain) InitPinsTBC() error {
 		glog.Error("failed to disable GNSS: ", err)
 	}
 	commands, err := c.SetPinsControl([]PinControl{
-
 		{
 			Label: sdp22,
 			ParentControl: PinParentControl{
