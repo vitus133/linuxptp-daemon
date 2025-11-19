@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	dpll "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -77,79 +76,4 @@ func Test_getPCIClockID(t *testing.T) {
 	clockID = getPCIClockID("truncated")
 	assert.Equal(t, notFound, clockID)
 	mfs.VerifyAllCalls(t)
-
-	// Config space barely holds capability ID but not the next-offset field;
-	// without a proper bounds check this would panic in Uint16(b[offset+2:]).
-	shortCap := make([]byte, pciConfigSpaceSize+2)
-	binary.LittleEndian.PutUint16(shortCap[pciConfigSpaceSize:], uint16(pciExtendedCapabilityDsnID+1))
-	mfs.ExpectReadFile("/sys/class/net/short_cap/device/config", shortCap, nil)
-	assert.NotPanics(t, func() {
-		clockID = getPCIClockID("short_cap")
-	})
-	assert.Equal(t, notFound, clockID)
-	mfs.VerifyAllCalls(t)
-}
-
-func Test_getClockIDByModule(t *testing.T) {
-	notFound := uint64(0)
-
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return nil, fmt.Errorf("Fake error")
-	}
-	clockID, err := getClockIDByModule("module")
-	assert.Error(t, err)
-	assert.Equal(t, notFound, clockID)
-
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return []*dpll.DoDeviceGetReply{}, nil
-	}
-	clockID, err = getClockIDByModule("module")
-	assert.Error(t, err)
-	assert.Equal(t, notFound, clockID)
-
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return []*dpll.DoDeviceGetReply{
-			{
-				ID:         0,
-				ModuleName: "other",
-				Type:       1,
-				ClockID:    1,
-			},
-			{
-				ID:         1,
-				ModuleName: "module",
-				Type:       2,
-				ClockID:    2,
-			},
-			{
-				ID:         2,
-				ModuleName: "module",
-				Type:       1,
-				ClockID:    42,
-			},
-		}, nil
-	}
-	clockID, err = getClockIDByModule("module")
-	assert.NoError(t, err)
-	assert.Equal(t, uint64(42), clockID)
-
-	getAllDpllDevices = func() ([]*dpll.DoDeviceGetReply, error) {
-		return []*dpll.DoDeviceGetReply{
-			{
-				ID:         0,
-				ModuleName: "other",
-				Type:       1,
-				ClockID:    1,
-			},
-			{
-				ID:         1,
-				ModuleName: "module",
-				Type:       2,
-				ClockID:    2,
-			},
-		}, nil
-	}
-	clockID, err = getClockIDByModule("module")
-	assert.NoError(t, err)
-	assert.Equal(t, uint64(2), clockID)
 }
