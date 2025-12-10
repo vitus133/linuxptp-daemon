@@ -68,11 +68,11 @@ var (
 var configPrefix = config.DefaultConfigPath
 
 var ptpProcesses = []string{
+	chronydProcessName, // there can be only one chronyd process in the system
 	ts2phcProcessName,  // there can be only one ts2phc process in the system
 	syncEProcessName,   // there can be only one synce Process per profile
 	ptp4lProcessName,   // there could be more than one ptp4l in the system
 	phc2sysProcessName, // there can be only one phc2sys process in the system
-	chronydProcessName, // there can be only one chronyd process in the system
 }
 
 var ptpTmpFiles = []string{
@@ -924,6 +924,10 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 				var eventSource []event.EventSource
 				if iface.Source == event.GNSS || iface.Source == event.PPS ||
 					(iface.Source == event.PTP4l && profileClockType == TBC) {
+					if nodeProfile.PtpSettings[dpll.PtpSettingsDpllIgnoreKey(iface.Name)] == "true" {
+						glog.Infof("Init dpll: Skipping dpll for %s", iface.Name)
+						continue
+					}
 					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
 					for k, v := range (*nodeProfile).PtpSettings {
 						glog.Info("Init dpll: ptp kv ", k, " ", v)
@@ -1152,7 +1156,6 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 		glog.Infof("%s is already running", p.name)
 		return
 	}
-
 	doneCh := make(chan struct{}) // Done setting up logging.  Go ahead and wait for process
 	defer func() {
 		if stdoutToSocket && p.c != nil {
@@ -1190,6 +1193,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
 					}
 					output = pm.ProcessLog(p.name, output)
+					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
+					output = p.replaceClockID(output)
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
@@ -1228,10 +1233,10 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 						output = fmt.Sprintf("%s[%d]%s: %s", chronydProcessName, p.cmd.Process.Pid, p.messageTag, output)
 					}
 					output = pm.ProcessLog(p.name, output)
-
+					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface
+					output = p.replaceClockID(output)
 					printWhenNotEmpty(logfilter.FilterOutput(p.logFilters, output))
-					// for ts2phc from 4.2 onwards replace /dev/ptpX by actual interface name
-					output = fmt.Sprintf("%s\n", p.replaceClockID(output))
+
 					// for ts2phc, we need to extract metrics to identify GM state
 					p.processPTPMetrics(output)
 					if p.name == ptp4lProcessName {
@@ -1241,7 +1246,8 @@ func (p *ptpProcess) cmdRun(stdoutToSocket bool, pm *plugin.PluginManager) {
 					} else if p.name == phc2sysProcessName && len(p.haProfile) > 0 {
 						p.announceHAFailOver(p.c, output) // do not use go routine since order of execution is important here
 					}
-					_, err2 := p.c.Write([]byte(removeMessageSuffix(output)))
+					line := removeMessageSuffix(output) + "\n"
+					_, err2 := p.c.Write([]byte(line))
 					if err2 != nil {
 						glog.Errorf("Write %s error %s:", output, err2)
 						goto connect
@@ -1608,6 +1614,39 @@ func (p *ptpProcess) replaceClockID(input string) (output string) {
 	}
 	// Extract the captured interface string (group 1)
 	iface := p.ifaces.GetPhcID2IFace(match[0])
+	// Fallback rationale:
+	// In some cases the ts2phc log may reference a PHC device that isn't yet
+	// present in this process' PHC->iface map (e.g., early logs before map build
+	// or when ts2phc tracks an iface not listed in ptp4lConf). To avoid
+	// mislabeling when multiple ts2phc-capable ifaces exist, we resolve the PHC
+	// by scanning all PTP-capable NICs and matching their PHC IDs.
+	if iface == match[0] || iface == "" {
+		glog.Infof("Fallback to discover PTP devices to resolve PHC ID for %s", match[0])
+		if nics, err := ptpnetwork.DiscoverPTPDevices(); err == nil {
+			for _, dev := range nics {
+				if ptpnetwork.GetPhcId(dev) == match[0] {
+					iface = dev
+					// Persist mapping so future lookups don't need fallback
+					updated := false
+					for idx := range p.ifaces {
+						if p.ifaces[idx].Name == dev {
+							p.ifaces[idx].PhcId = match[0]
+							updated = true
+							break
+						}
+					}
+					if !updated {
+						p.ifaces.Add(config.Iface{Name: dev, PhcId: match[0]})
+					}
+					break
+				}
+			}
+		}
+	}
+	if iface == "" || strings.HasPrefix(iface, "/dev/ptp") {
+		return input
+	}
+
 	output = clockIDRegEx.ReplaceAllString(input, iface)
 	return output
 }
