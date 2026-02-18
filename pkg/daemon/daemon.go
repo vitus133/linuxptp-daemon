@@ -1108,6 +1108,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 			var maxInSpecOffset uint64 = dpll.MaxInSpecOffset
 			var inSyncConditionTh uint64 = dpll.MaxInSpecOffset
 			var inSyncConditionTimes uint64 = 1
+			var flags dpll.Flag
 			sInSyncConditionTh, found1 := (*nodeProfile).PtpSettings["inSyncConditionThreshold"]
 			if found1 {
 				inSyncConditionTh, err = strconv.ParseUint(sInSyncConditionTh, 0, 64)
@@ -1148,6 +1149,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 						glog.Infof("Init dpll: Skipping dpll for %s", iface.Name)
 						continue
 					}
+
+					flags = 0 // Default to 0 = no flags set
+
 					glog.Info("Init dpll: ptp settings ", (*nodeProfile).PtpSettings)
 					for k, v := range (*nodeProfile).PtpSettings {
 						glog.Info("Init dpll: ptp kv ", k, " ", v)
@@ -1173,6 +1177,9 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 						}
 						if k == fmt.Sprintf("%s[%s]", dpll.ClockIdStr, iface.Name) {
 							clockId = i
+						}
+						if k == dpll.PtpSettingsDpllFlagsKey(iface.Name) {
+							flags = dpll.Flag(i)
 						}
 					}
 
@@ -1204,7 +1211,7 @@ func (dn *Daemon) applyNodePtpProfile(runID int, nodeProfile *ptpv1.PtpProfile) 
 					dpllDaemon := dpll.NewDpll(clockId, localMaxHoldoverOffSet, localHoldoverTimeout,
 						maxInSpecOffset, iface.Name, eventSource, dpll.NONE, dn.GetPhaseOffsetPinFilter(nodeProfile),
 						// Used only in T-BC in-sync condition:
-						inSyncConditionTh, inSyncConditionTimes)
+						inSyncConditionTh, inSyncConditionTimes, flags)
 					glog.Infof("depending on %s", dpllDaemon.DependsOn())
 					// Set hardwareconfig handler if hardwareconfig manager is available
 					dpllDaemon.SetHardwareConfigHandler(func(devices []*dpllnl.DoDeviceGetReply) error {
