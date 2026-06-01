@@ -166,6 +166,9 @@ type DpllConfig struct {
 
 	// Some DPLLs (Carter Flats, for one) do not have both pps (phase) and eec (frequency) states.
 	flags Flag
+
+	// devices holds the cache of DPLL device replies
+	devices []*nl.DoDeviceGetReply
 }
 
 func (d *DpllConfig) InSpec() bool {
@@ -421,25 +424,28 @@ func (d *DpllConfig) Timer() int64 {
 	return d.timer
 }
 
-func (d *DpllConfig) PhaseOffsetPin(pin *nl.PinInfo) bool {
-	if pin.ClockID == d.clockId && len(pin.ParentDevice) > PPS_PIN_INDEX && pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset != math.MaxInt64 {
-		for k, v := range d.phaseOffsetPinFilter[strconv.FormatUint(d.clockId, 10)] {
-			switch k {
-			case "boardLabel":
-				if strings.Compare(pin.BoardLabel, v) != 0 {
-					return false
-				}
-			case "panelLabel":
-				if strings.Compare(pin.PanelLabel, v) != 0 {
-					return false
-				}
-			default:
-				glog.Warningf("unsupported phase offset pin filter key: %s", k)
+// ActivePhaseOffsetPin checks whether the given pin is actively connected
+// and feeds the relevant PPS DPLL matched by clock ID
+func (d *DpllConfig) ActivePhaseOffsetPin(pin *nl.PinInfo) (int, bool) {
+	if pin.ClockID != d.clockId {
+		return -1, false
+	}
+	for i, p := range pin.ParentDevice {
+		// Legacy behavior: An input pin was considered "connected" if it acted as a source.
+		// New behavior: An input pin is the device synchronization source when its OperState is "active".
+		// Note: In this scenario, the administrative state never exceeds "selectable".
+		if (p.State != nl.PinStateConnected && p.Operstate != nl.PinOperstateActive) || p.Direction != nl.PinDirectionInput {
+			glog.Infof("pin id %d parentID=%d skipped: direction=%s adminState=%s operstate=%s",
+				pin.ID, p.ParentID, nl.GetPinDirection(p.Direction), nl.GetPinState(p.State), nl.GetPinOperstate(p.Operstate))
+			continue
+		}
+		for _, dev := range d.devices {
+			if dev.ID == p.ParentID && dev.ClockID == d.clockId && nl.GetDpllType(dev.Type) == "pps" {
+				return i, true
 			}
 		}
-		return true
 	}
-	return false
+	return -1, false
 }
 
 // nlUpdateState updates DPLL state in the DpllConfig structure.
@@ -467,8 +473,8 @@ func (d *DpllConfig) nlUpdateState(devices []*nl.DoDeviceGetReply, pins []*nl.Pi
 		}
 	}
 	for _, pin := range pins {
-		if d.PhaseOffsetPin(pin) {
-			d.SetPhaseOffset(pin.ParentDevice[PPS_PIN_INDEX].PhaseOffset)
+		if index, ok := d.ActivePhaseOffsetPin(pin); ok {
+			d.SetPhaseOffset(pin.ParentDevice[index].PhaseOffset)
 			glog.Info("setting phase offset to ", d.phaseOffset, " ns for clock id ", d.clockId, " iface ", d.iface)
 			valid = true
 		}
@@ -593,6 +599,8 @@ func (d *DpllConfig) MonitorDpllNetlink() {
 			if err != nil {
 				goto abort
 			}
+
+			d.devices = replies
 
 			if d.nlUpdateState(replies, []*nl.PinInfo{}) {
 				d.stateDecision()
