@@ -50,11 +50,6 @@ type E825Opts struct {
 	Gnss     GnssOptions `json:"gnss"`
 }
 
-// GnssOptions defines GNSS-specific options for the e825
-type GnssOptions struct {
-	Disabled bool `json:"disabled"`
-}
-
 // E825PluginData is the data structure for e825 plugin
 type E825PluginData struct {
 	PluginData
@@ -66,11 +61,33 @@ func tbcConfigured(nodeProfile *ptpv1.PtpProfile) bool {
 	return nodeProfile.PtpSettings["clockType"] == "T-BC"
 }
 
+func leadingInterfaceForPinReset(nodeProfile *ptpv1.PtpProfile, devices []string) string {
+	if nodeProfile.PtpSettings != nil {
+		if device := nodeProfile.PtpSettings["leadingInterface"]; device != "" {
+			return device
+		}
+	}
+	if len(devices) > 0 {
+		return devices[0]
+	}
+	return ""
+}
+
+func applyNicPinReset(device string) {
+	if device == "" {
+		return
+	}
+	if err := pinConfig.applyPinSet(device, bcDpllPinReset); err != nil {
+		glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
+	}
+}
+
 // OnPTPConfigChangeE825 performs actions on PTP config change for e825 plugin
 func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	pluginData := (*data).(*E825PluginData)
 	glog.Infof("calling onPTPConfigChange for e825 plugin (%s)", *nodeProfile.Name)
 	var e825Opts E825Opts
+	e825Opts.Gnss.LeapSources = defaultLeapSourceOptions()
 	var err error
 	var optsByteArray []byte
 
@@ -104,7 +121,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
 				clkID := zlClockID
 				if zlErr != nil {
-					clkID = getPCIClockID(device)
+					clkID = getClockID(device)
 				}
 				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(clkID, 10)
 				glog.Infof("Detected %s=%d (%x)", dpllClockIDStr, clkID, clkID)
@@ -138,7 +155,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					if zlErr == nil {
 						clockIDUsed = zlClockID
 					} else {
-						clockIDUsed = getPCIClockID(iface)
+						clockIDUsed = getClockID(iface)
 					}
 					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(clockIDUsed, 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
@@ -147,6 +164,12 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 
 			// Always enforce GNSS setting (default = enabled)
 			pluginData.setupGnss(e825Opts.Gnss)
+
+			updateLeapManagerSources(e825Opts.Gnss.LeapSources)
+
+			if !e825Opts.Gnss.Disabled {
+				applyNicPinReset(leadingInterfaceForPinReset(nodeProfile, allDevices))
+			}
 
 			// BC sanity check and pin setup
 			if tbcConfigured(nodeProfile) {
@@ -157,11 +180,7 @@ func OnPTPConfigChangeE825(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 					// TODO: We could actually figure this out based on upstreamPort... And the fact that there's only one NAC per GNR-D
 					return errors.New("GNR-D T-BC must set leadingInterface")
 				}
-				device := nodeProfile.PtpSettings["leadingInterface"]
-				err = pinConfig.applyPinSet(device, bcDpllPinReset)
-				if err != nil {
-					glog.Errorf("Could not apply BC pin reset to %s: %s", device, err)
-				}
+				applyNicPinReset(nodeProfile.PtpSettings["leadingInterface"])
 				if inputPinErr := pluginData.setupDpllInputPins(); inputPinErr != nil {
 					glog.Errorf("Could not enable DPLL input pins for T-BC: %s", inputPinErr)
 				}
@@ -260,7 +279,7 @@ func (d *E825PluginData) setupGnss(gnss GnssOptions) error {
 		return errors.New("no GNSS pins found")
 	}
 	glog.Infof("Will %s %d GNSS pins: %v", action, len(commands), affectedPins)
-	return BatchPinSet(&commands)
+	return BatchPinSet(commands)
 }
 
 // setupDpllInputPins enables DPLL input pins for T-BC by setting their PPS parent to selectable
