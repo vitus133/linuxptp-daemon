@@ -12,6 +12,7 @@ import (
 	"time"
 
 	fbprotocol "github.com/facebook/time/ptp/protocol"
+	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/parser"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -454,10 +455,12 @@ func TestEmitPortRoleLogs_AppendsNewline(t *testing.T) {
 	assert.True(t, e.reconnectEventSocket())
 
 	// Set port role events without trailing newlines (as parser produces them)
-	e.SetPortRole("ptp4l.0.config", "ens3f2",
-		"ptp4l[137078.691]: [ptp4l.0.config:5] port 1 (ens3f2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED")
-	e.SetPortRole("ptp4l.0.config", "ens3f1",
-		"ptp4l[137078.515]: [ptp4l.0.config:5] port 2 (ens3f1): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES")
+	e.SetPortRole("ptp4l.0.config", "ens3f2", &parser.PTPEvent{
+		Raw: "ptp4l[137078.691]: [ptp4l.0.config:5] port 1 (ens3f2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED",
+	})
+	e.SetPortRole("ptp4l.0.config", "ens3f1", &parser.PTPEvent{
+		Raw: "ptp4l[137078.515]: [ptp4l.0.config:5] port 2 (ens3f1): LISTENING to MASTER on ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES",
+	})
 
 	e.EmitPortRoleLogs()
 
@@ -505,8 +508,9 @@ func TestEmitPortRoleLogs_PreservesExistingNewline(t *testing.T) {
 	assert.True(t, e.reconnectEventSocket())
 
 	// Set a port role event that already has a trailing newline
-	e.SetPortRole("ptp4l.0.config", "ens3f2",
-		"ptp4l[137078.691]: [ptp4l.0.config:5] port 1 (ens3f2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED\n")
+	e.SetPortRole("ptp4l.0.config", "ens3f2", &parser.PTPEvent{
+		Raw: "ptp4l[137078.691]: [ptp4l.0.config:5] port 1 (ens3f2): UNCALIBRATED to SLAVE on MASTER_CLOCK_SELECTED\n",
+	})
 
 	e.EmitPortRoleLogs()
 

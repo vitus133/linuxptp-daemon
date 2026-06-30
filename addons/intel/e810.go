@@ -3,13 +3,11 @@ package intel
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/golang/glog"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll"
-	dpll_netlink "github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/dpll-netlink"
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/plugin"
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
@@ -21,6 +19,7 @@ type E810Opts struct {
 	EnableDefaultConfig bool          `json:"enableDefaultConfig"`
 	UblxCmds            UblxCmdList   `json:"ublxCmds"`
 	PhaseInputs         []PhaseInputs `json:"interconnections"`
+	Gnss                GnssOptions   `json:"gnss"`
 }
 
 // GetPhaseInputs implements PhaseInputsProvider
@@ -31,8 +30,7 @@ type E810PluginData struct {
 }
 
 var (
-	unitTest   bool
-	clockChain ClockChainInterface = &ClockChain{}
+	clockChain ClockChainInterface = &ClockChain{DpllPins: DpllPins}
 
 	// defaultE810PinConfig -> All outputs disabled
 	defaultE810PinConfig = pinSet{
@@ -43,15 +41,22 @@ var (
 	}
 )
 
-// For mocking DPLL pin info
-var DpllPins = []*dpll_netlink.PinInfo{}
-
 func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) error {
 	glog.Info("calling onPTPConfigChange for e810 plugin")
+
+	autoDetectGNSSSerialPort(nodeProfile)
+	checkPinIndex(nodeProfile)
+
 	var e810Opts E810Opts
+	e810Opts.Gnss.LeapSources = defaultLeapSourceOptions()
 	var err error
 
 	e810Opts.EnableDefaultConfig = false
+
+	err = DpllPins.FetchPins()
+	if err != nil {
+		return err
+	}
 
 	for name, opts := range (*nodeProfile).Plugins {
 		if name == pluginNameE810 {
@@ -60,42 +65,26 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			if err != nil {
 				glog.Error("e810 failed to unmarshal opts: " + err.Error())
 			}
-			// for unit testing only, PtpSettings may include "unitTest" key. The value is
-			// the path where resulting configuration files will be written, instead of /var/run
-			_, unitTest = (*nodeProfile).PtpSettings["unitTest"]
-			if unitTest {
-				MockPins()
-			}
 
 			allDevices := e810Opts.allDevices()
-			glog.Infof("Initializing e810 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 
-			if e810Opts.EnableDefaultConfig {
-				for _, device := range allDevices {
-					err = pinConfig.applyPinSet(device, defaultE810PinConfig)
-					if err != nil {
-						glog.Errorf("e825 failed to set default Pin configuration for %s: %s", device, err)
-					}
-				}
-			}
+			clockIDs := make(map[string]uint64)
 
 			if (*nodeProfile).PtpSettings == nil {
 				(*nodeProfile).PtpSettings = make(map[string]string)
 			}
 
-			// Setup clockID
+			glog.Infof("Initializing e810 plugin for profile %s and devices %v", *nodeProfile.Name, allDevices)
 			for _, device := range allDevices {
-				dpllClockIdStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
-				(*nodeProfile).PtpSettings[dpllClockIdStr] = strconv.FormatUint(getPCIClockID(device), 10)
+				dpllClockIDStr := fmt.Sprintf("%s[%s]", dpll.ClockIdStr, device)
+				clkID := getClockID(device)
+				if clkID == 0 {
+					glog.Errorf("failed to get clockID for device %s; pins for this device will not be configured", device)
+				}
+				clockIDs[device] = clkID
+				(*nodeProfile).PtpSettings[dpllClockIDStr] = strconv.FormatUint(clkID, 10)
 			}
 
-			// Initialize all user-specified phc pins and frequencies
-			for device, pins := range e810Opts.DevicePins {
-				err = pinConfig.applyPinSet(device, pins)
-				if err != nil {
-					glog.Errorf("e825 failed to set Pin configuration for %s: %s", device, err)
-				}
-			}
 			for device, frequencies := range e810Opts.DeviceFreqencies {
 				err = pinConfig.applyPinFrq(device, frequencies)
 				if err != nil {
@@ -113,7 +102,7 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 			// Copy PhaseOffsetPins settings from plugin config to PtpSettings
 			for iface, properties := range e810Opts.PhaseOffsetPins {
 				for pinProperty, value := range properties {
-					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getPCIClockID(iface), 10), pinProperty}, ".")
+					key := strings.Join([]string{iface, "phaseOffsetFilter", strconv.FormatUint(getClockID(iface), 10), pinProperty}, ".")
 					(*nodeProfile).PtpSettings[key] = value
 				}
 			}
@@ -132,8 +121,52 @@ func OnPTPConfigChangeE810(data *interface{}, nodeProfile *ptpv1.PtpProfile) err
 				if err != nil {
 					glog.Errorf("Could not restore clockChain pin defaults: %s", err)
 				}
-				clockChain = &ClockChain{}
+				clockChain = &ClockChain{DpllPins: DpllPins}
+				err = DpllPins.FetchPins()
+				if err != nil {
+					glog.Errorf("Could not determine the current state of the dpll pins: %s", err)
+				}
 			}
+
+			if e810Opts.EnableDefaultConfig {
+				for _, device := range allDevices {
+					if hasSysfsSMAPins(device) {
+						err = pinConfig.applyPinSet(device, defaultE810PinConfig)
+					} else {
+						err = DpllPins.ApplyPinCommands(DpllPins.GetCommandsForPluginPinSet(clockIDs[device], defaultE810PinConfig))
+					}
+					if err != nil {
+						glog.Errorf("e810 failed to set default Pin configuration for %s: %s", device, err)
+					}
+				}
+			}
+
+			// Initialize all user-specified phc pins and frequencies
+			for device, pins := range e810Opts.DevicePins {
+				if hasSysfsSMAPins(device) {
+					err = pinConfig.applyPinSet(device, pins)
+				} else {
+					commands := DpllPins.GetCommandsForPluginPinSet(clockIDs[device], pins)
+					if pinSetHasSMAInput(pins) {
+						gnssPin := DpllPins.GetByLabel(gnss, clockIDs[device])
+						if gnssPin != nil {
+							gnssCommands := SetPinControlData(*gnssPin, PinParentControl{
+								EecPriority: 4,
+								PpsPriority: 4,
+							})
+							commands = append(commands, gnssCommands...)
+						} else {
+							glog.Warningf("SMA input detected but GNSS-1PPS pin not found for clockID %d", clockIDs[device])
+						}
+					}
+					err = DpllPins.ApplyPinCommands(commands)
+				}
+				if err != nil {
+					glog.Errorf("e810 failed to set Pin configuration for %s: %s", device, err)
+				}
+			}
+
+			updateLeapManagerSources(e810Opts.Gnss.LeapSources)
 		}
 	}
 	return nil
@@ -204,12 +237,54 @@ func E810(name string) (*plugin.Plugin, *interface{}) {
 	return &_plugin, &iface
 }
 
-func loadPins(path string) (*[]dpll_netlink.PinInfo, error) {
-	pins := &[]dpll_netlink.PinInfo{}
-	ptext, err := os.ReadFile(path)
-	if err != nil {
-		return pins, err
+func pinSetHasSMAInput(pins pinSet) bool {
+	for label, value := range pins {
+		if (label == "SMA1" || label == "SMA2") &&
+			strings.HasPrefix(strings.TrimSpace(value), "1") {
+			return true
+		}
 	}
-	err = json.Unmarshal([]byte(ptext), pins)
-	return pins, err
+	return false
+}
+
+func checkPinIndex(nodeProfile *ptpv1.PtpProfile) {
+	if nodeProfile.Ts2PhcConf == nil {
+		return
+	}
+
+	profileName := ""
+	if nodeProfile.Name != nil {
+		profileName = *nodeProfile.Name
+	}
+
+	lines := strings.Split(*nodeProfile.Ts2PhcConf, "\n")
+	result := make([]string, 0, len(lines)+1)
+	shouldAddPinIndex := false
+	for _, line := range lines {
+		trimedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimedLine, "[") && strings.HasSuffix(trimedLine, "]") {
+			// We went through the previous entry and didn't find a pin index
+			if shouldAddPinIndex {
+				glog.Infof("Adding 'ts2phc.pin_index 1' to ts2phc for profile name %s", profileName)
+				result = append(result, "ts2phc.pin_index 1")
+				shouldAddPinIndex = false
+			}
+
+			ifName := strings.TrimSpace(strings.TrimRight(strings.TrimLeft(trimedLine, "["), "]"))
+			if ifName != "global" && ifName != "nmea" && !hasSysfsSMAPins(ifName) {
+				shouldAddPinIndex = true
+			}
+		}
+		if strings.HasPrefix(trimedLine, "ts2phc.pin_index") || strings.HasPrefix(trimedLine, "ts2phc.pin_name") {
+			shouldAddPinIndex = false
+		}
+		result = append(result, line)
+	}
+	if shouldAddPinIndex {
+		glog.Infof("Adding 'ts2phc.pin_index 1' to ts2phc for profile name %s", profileName)
+		result = append(result, "ts2phc.pin_index 1")
+	}
+
+	updatedTs2phcConfig := strings.Join(result, "\n")
+	nodeProfile.Ts2PhcConf = &updatedTs2phcConfig
 }

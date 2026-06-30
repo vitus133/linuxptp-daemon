@@ -387,6 +387,9 @@ func (e *EventHandler) updateGMState(cfgName string) clockSyncState {
 				// expecting to have at least one interface
 			case TS2PHCProcessName:
 				ts2phcState = d.State
+				if parser.NoSourceTSCount == 2 {
+					ts2phcState = PTP_FREERUN
+				}
 			}
 		}
 	} else {
@@ -437,7 +440,9 @@ func (e *EventHandler) updateGMState(cfgName string) clockSyncState {
 		case PTP_FREERUN:
 			if syncSrcLost {
 				switch ts2phcState {
-				case PTP_LOCKED, PTP_FREERUN:
+				case PTP_LOCKED:
+				case PTP_FREERUN:
+					e.clkSyncState[cfgName].state = PTP_FREERUN
 				// stay with last GM state and wait for DPLL to move to HOLDOVER
 				case PTP_HOLDOVER:
 					e.clkSyncState[cfgName].state = PTP_HOLDOVER
@@ -621,6 +626,7 @@ func (e *EventHandler) AnnounceClockClass(clockClass fbprotocol.ClockClass, cloc
 func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy, cfgName string) {
 	e.Lock()
 	e.setClockClassLocked(clockClass, clockAcc)
+	e.storeClockClassLocked(cfgName, clockClass, clockAcc)
 	e.Unlock()
 
 	e.emitClockClass(clockClass, cfgName)
@@ -631,6 +637,17 @@ func (e *EventHandler) announceClockClass(clockClass fbprotocol.ClockClass, cloc
 func (e *EventHandler) setClockClassLocked(clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy) {
 	e.clockClass = clockClass
 	e.clockAccuracy = clockAcc
+}
+
+// storeClockClassLocked stores the clock class and accuracy in clkSyncState
+// so that EmitClockClass and the classTicker can re-emit after a reconnect.
+// Caller must hold e.Lock().
+func (e *EventHandler) storeClockClassLocked(cfgName string, clockClass fbprotocol.ClockClass, clockAcc fbprotocol.ClockAccuracy) {
+	if _, ok := e.clkSyncState[cfgName]; !ok {
+		e.clkSyncState[cfgName] = &clockSyncState{}
+	}
+	e.clkSyncState[cfgName].clockClass = clockClass
+	e.clkSyncState[cfgName].clockAccuracy = clockAcc
 }
 
 // emitClockClass writes the clock class to the socket and updates the metric.
@@ -691,7 +708,15 @@ func (e *EventHandler) writeLogToSocket(l string) bool {
 	}
 	conn := e.getConn()
 	if conn == nil {
-		return false
+		if !e.reconnectEventSocket() {
+			glog.Warning("Connection is nil and reconnect failed, skipping socket write")
+			return false
+		}
+		conn = e.getConn()
+		if conn == nil {
+			glog.Error("Connection is still nil after successful reconnect, skipping socket write")
+			return false
+		}
 	}
 	if err := conn.SetWriteDeadline(time.Now().Add(socketWriteTimeout)); err != nil {
 		glog.Warningf("Failed to set write deadline: %v", err)
@@ -776,6 +801,7 @@ func (e *EventHandler) ProcessEvents() {
 						e.Lock()
 						e.clockClass = clk.clockClass
 						e.clockAccuracy = clk.clockAccuracy
+						e.storeClockClassLocked(clk.cfgName, clk.clockClass, clk.clockAccuracy)
 						e.Unlock()
 					}
 
@@ -1261,6 +1287,7 @@ func (e *EventHandler) UpdateClockClass(clk ClockClassRequest) {
 		e.Lock()
 		e.clockClass = clockClass
 		e.clockAccuracy = clockAccuracy
+		e.storeClockClassLocked(clk.cfgName, clockClass, clockAccuracy)
 		e.Unlock()
 		clockClassOut := utils.GetClockClassLogMessage(PTP4lProcessName, clk.cfgName, clockClass)
 		if e.stdoutToSocket {

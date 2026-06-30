@@ -289,11 +289,11 @@ func (e *EventHandler) updateDownstreamData(cfgName string) {
 }
 
 // EmitClockClass emits the current clock class and accuracy for the specified configuration.
-// Broken pipe errors are handled internally via signalBrokenPipe.
 func (e *EventHandler) EmitClockClass(cfgName string) {
 	e.Lock()
 	state, ok := e.clkSyncState[cfgName]
 	if !ok {
+		glog.Warningf("EmitClockClass: no clkSyncState entry for %s, skipping", cfgName)
 		e.Unlock()
 		return
 	}
