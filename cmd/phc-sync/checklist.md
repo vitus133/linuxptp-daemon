@@ -11,7 +11,7 @@
 
 ## Docker / container build
 - [x] no `.dockerignore` is added: `hack/build.sh` builds with `--mod=vendor` and runs `git rev-list -1 HEAD`, so the build context must keep the committed `vendor/` and `.git/`
-- [x] multi-stage Dockerfile output references the phc-sync binary, not the daemon
+- [x] multi-stage Dockerfile copies both the daemon `bin/ptp` and the `bin/phc-sync` binary into the image
 
 ## Runtime smoke test
 - [ ] `phc-sync -interface <iface>` reports a non-empty status and exits cleanly

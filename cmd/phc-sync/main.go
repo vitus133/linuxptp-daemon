@@ -11,7 +11,17 @@ import (
 	"github.com/k8snetworkplumbingwg/linuxptp-daemon/pkg/phcsync"
 )
 
-var version = "0.1.0"
+var (
+	version   = "0.1.0"
+	GitCommit string
+)
+
+func versionString() string {
+	if GitCommit != "" {
+		return version + " (" + GitCommit + ")"
+	}
+	return version
+}
 
 func main() {
 	fs := flag.NewFlagSet("phc-sync", flag.ExitOnError)
@@ -27,7 +37,7 @@ func main() {
 		glog.Fatalf("phc-sync: parse flags: %v", err)
 	}
 	if *showVersion {
-		fmt.Printf("phc-sync %s\n", version)
+		fmt.Printf("phc-sync %s\n", versionString())
 		return
 	}
 	if *iface == "" {
