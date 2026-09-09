@@ -3,6 +3,7 @@ package phcsync
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -67,7 +68,8 @@ func Sync(r Runner, cfg Config) (Status, error) {
 		o, err := r.RunAndCapture(cfg.PTP4LArgs[0], cfg.PTP4LArgs[1:]...)
 		out = o
 		if err != nil {
-			return StatusConfusion, fmt.Errorf("phcsync: ptp4l failed: %w", err)
+			return StatusConfusion, fmt.Errorf("phcsync: ptp4l failed: %w\ncommand: %s\noutput:\n%s",
+				err, strings.Join(cfg.PTP4LArgs, " "), out)
 		}
 	}
 	res := parseSyncOutput(out)
