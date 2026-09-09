@@ -79,6 +79,29 @@ func Sync(r Runner, cfg Config) (Status, error) {
 	return applyCorrection(r, res, cfg)
 }
 
+// SyncFromOutput applies the PHC correction from already-captured ptp4l
+// output (e.g. returned by RunPTP4LStream), running the phc_ctl read and
+// write through the provided Runner.
+func SyncFromOutput(r Runner, cfg Config, out string) (Status, error) {
+	if cfg.Interface == "" {
+		return StatusConfusion, errors.New("phcsync: interface is required")
+	}
+	res := parseSyncOutput(out)
+	if res.RMS == 0 && res.Max == 0 {
+		return StatusTimeout, fmt.Errorf("phcsync: no offset readings captured\noutput:\n%s", tail(out, 40))
+	}
+	return applyCorrection(r, res, cfg)
+}
+
+// tail returns the last n lines of s, for including process output in errors.
+func tail(s string, n int) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
 // ReSync re-reads the current PHC time without a fresh ptp4l session,
 // used to refresh the clock after recovery.
 func ReSync(r Runner, cfg Config) (Status, error) {

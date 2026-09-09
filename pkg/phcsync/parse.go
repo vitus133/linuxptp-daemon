@@ -15,11 +15,22 @@ var (
 	// gradient side-effect: ReSyncRegressionDelta pattern for clock_class drift.
 	clockClassPattern = regexp.MustCompile(`clock_class\s+(\d+)`)
 
+	// offsetPattern matches a per-second offset measurement line from stock
+	// ptp4l output.
+	masterOffsetPattern = regexp.MustCompile(`\bmaster offset\s+-?\d+`)
+
 	// ptp4l summary event patterns.
 	kernelAppeared      = regexp.MustCompile(`(?i)\bKernel ptp clock (appeared|disappeared|changed)\b`)
 	externalPortChanged = regexp.MustCompile(`(?i)port change\s+.*external.*`)
 	ptpPortStatePattern = regexp.MustCompile(`(?i)\bport\s+\d+\s+became\s+(MASTER|SLAVE|LISTENING|FAULTY|UNKNOWN|DISABLED|UNCALIBRATED|PASSIVE)\b`)
 )
+
+// isMeasurementLine reports whether a ptp4l line carries an offset
+// measurement (either the rms/max summary form used by the daemon's ptp4l
+// fork or the stock "master offset" form).
+func isMeasurementLine(line string) bool {
+	return syncOffsetPattern.MatchString(line) || masterOffsetPattern.MatchString(line)
+}
 
 // endState detects the end state of a state-machine step from ptp4l output.
 func endState(line string) (string, bool) {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -95,4 +96,56 @@ func (OSRunner) RunAndCapture(name string, args ...string) (string, error) {
 // StartRunning implements Runner.
 func (OSRunner) StartRunning(name string, args ...string) (*RunningProcess, error) {
 	return StartRunning(name, args...)
+}
+
+// LoggingRunner wraps a Runner and streams every command and each output line
+// to Log as it is produced, while still returning the full captured output.
+type LoggingRunner struct {
+	Inner Runner
+	Log   func(format string, args ...any)
+}
+
+// RunAndCapture implements Runner.
+func (l LoggingRunner) RunAndCapture(name string, args ...string) (string, error) {
+	if l.Log != nil {
+		l.Log("command: %s %s", name, strings.Join(args, " "))
+	}
+	cmd := exec.Command(name, args...)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return "", err
+	}
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	if err := cmd.Start(); err != nil {
+		pr.Close()
+		pw.Close()
+		return "", err
+	}
+	pw.Close()
+
+	var out strings.Builder
+	sc := bufio.NewScanner(pr)
+	for sc.Scan() {
+		line := sc.Text()
+		if l.Log != nil {
+			l.Log("%s: %s", name, line)
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	pr.Close()
+	err = cmd.Wait()
+	if err != nil {
+		return out.String(), err
+	}
+	return out.String(), nil
+}
+
+// StartRunning implements Runner.
+func (l LoggingRunner) StartRunning(name string, args ...string) (*RunningProcess, error) {
+	if l.Log != nil {
+		l.Log("command: %s %s", name, strings.Join(args, " "))
+	}
+	return l.Inner.StartRunning(name, args...)
 }

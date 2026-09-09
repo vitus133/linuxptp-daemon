@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -36,50 +37,66 @@ func PTP4LArgs(iface, logDir string) []string {
 
 // PTP4LConfig carries the ptp4l session inputs for a task.
 type PTP4LConfig struct {
-	Interface string
-	LogDir    string
-	Out       string
-	Logger    func(format string, args ...any)
+	Interface  string
+	LogDir     string
+	Iterations int
+	Logger     func(format string, args ...any)
 }
 
-// RunPTP4LStream starts a ptp4l session and consumes its log output until the
-// first silence between measurement lines exceeds MaxTaskTimeout.
-func RunPTP4LStream(cfg PTP4LConfig, maxTaskTimeout time.Duration) error {
+// RunPTP4LStream starts a ptp4l session, streaming every output line to
+// cfg.Logger in real time, and returns the captured output. The session ends
+// after cfg.Iterations offset measurements (when > 0), on a detected
+// end-state line, or when no activity is seen for MaxTaskTimeout.
+func RunPTP4LStream(cfg PTP4LConfig, maxTaskTimeout time.Duration) (out string, retErr error) {
 	if cfg.Interface == "" {
-		return errors.New("phcsync: ptp4l interface is required")
+		return "", errors.New("phcsync: ptp4l interface is required")
 	}
-	proc, err := StartRunning(PTP4LArgs(cfg.Interface, cfg.LogDir)[0], PTP4LArgs(cfg.Interface, cfg.LogDir)[1:]...)
+	args := PTP4LArgs(cfg.Interface, cfg.LogDir)
+	if cfg.Logger != nil {
+		cfg.Logger("command: ptp4l %s", strings.Join(args[1:], " "))
+	}
+	proc, err := StartRunning(args[0], args[1:]...)
 	if err != nil {
-		return fmt.Errorf("phcsync: start ptp4l: %w", err)
+		return "", fmt.Errorf("phcsync: start ptp4l: %w", err)
 	}
-	defer proc.Stop()
+	defer func() {
+		if err := proc.Stop(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("phcsync: stop ptp4l: %w", err)
+		}
+	}()
 
 	sc := proc.Scanner()
 	first := time.Now()
 	last := first
+	measurements := 0
+	var lines []string
 	for sc.Scan() {
 		line := sc.Text()
+		lines = append(lines, line)
 		if line != "" {
 			last = time.Now()
 			if cfg.Logger != nil {
-				cfg.Logger("%s", line)
+				cfg.Logger("ptp4l: %s", line)
 			}
-		}
-		if line != "" {
-			last = time.Now()
+			if isMeasurementLine(line) {
+				measurements++
+				if cfg.Iterations > 0 && measurements >= cfg.Iterations {
+					break
+				}
+			}
 		}
 		// endState detection mirrors the daemon's ptp4l state-machine watch.
 		if _, ok := endState(line); ok {
 			break
 		}
 		if maxTaskTimeout > 0 && time.Since(last) > maxTaskTimeout {
-			return fmt.Errorf("phcsync: ptp4l idle for %s: %w", maxTaskTimeout, ErrPTP4LTimeout)
+			return strings.Join(lines, "\n"), fmt.Errorf("phcsync: ptp4l idle for %s: %w", maxTaskTimeout, ErrPTP4LTimeout)
 		}
 		if maxTaskTimeout > 0 && time.Since(first) > maxTaskTimeout {
-			return fmt.Errorf("phcsync: ptp4l session exceeded %s", maxTaskTimeout)
+			return strings.Join(lines, "\n"), fmt.Errorf("phcsync: ptp4l session exceeded %s", maxTaskTimeout)
 		}
 	}
-	return nil
+	return strings.Join(lines, "\n"), sc.Err()
 }
 
 // ErrPTP4LTimeout is returned when a ptp4l session produces no measurement

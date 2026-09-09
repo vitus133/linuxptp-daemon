@@ -56,15 +56,19 @@ func main() {
 		MaxTaskTimeout: *maxTimeout,
 	}
 
-	if err := phcsync.RunPTP4LStream(phcsync.PTP4LConfig{
-		Interface: *iface,
-		LogDir:    *logDir,
-		Logger:    glog.Infof,
-	}, *maxTimeout); err != nil {
+	logf := glog.Infof
+	out, err := phcsync.RunPTP4LStream(phcsync.PTP4LConfig{
+		Interface:  *iface,
+		LogDir:     *logDir,
+		Iterations: *iterations,
+		Logger:     logf,
+	}, *maxTimeout)
+	if err != nil {
 		glog.Warningf("phc-sync: ptp4l session: %v", err)
 	}
 
-	status, err := phcsync.Sync(phcsync.OSRunner{}, cfg)
+	runner := phcsync.LoggingRunner{Inner: phcsync.OSRunner{}, Log: logf}
+	status, err := phcsync.SyncFromOutput(runner, cfg, out)
 	if err != nil {
 		glog.Fatalf("phc-sync: synchronization failed: %v", err)
 	}
