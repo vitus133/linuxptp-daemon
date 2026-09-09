@@ -1,6 +1,31 @@
 package phcsync
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestPTP4LArgsWritesDefaultConfig(t *testing.T) {
+	dir := t.TempDir()
+	args := PTP4LArgs("eth0", dir)
+	found := false
+	for _, a := range args {
+		if filepath.Base(a) == "default.cfg" && filepath.Dir(a) == dir {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ptp4l args do not reference default.cfg in %s: %v", dir, args)
+	}
+	cfg, err := os.ReadFile(filepath.Join(dir, "default.cfg"))
+	if err != nil {
+		t.Fatalf("default.cfg not written: %v", err)
+	}
+	if len(cfg) == 0 {
+		t.Fatal("default.cfg is empty")
+	}
+}
 
 func TestDiscoverNetDevice(t *testing.T) {
 	dev, err := DiscoverNetDevice(nil, DiscoveryConfig{ScanDir: t.TempDir()})

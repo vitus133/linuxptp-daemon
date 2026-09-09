@@ -8,13 +8,27 @@ import (
 	"time"
 )
 
+// defaultPTP4LConfig is written to the log directory on first run so ptp4l
+// has a config to open when none is provided.
+const defaultPTP4LConfig = `# phc-sync free-running measurement session
+[global]
+logSyncInterval -4
+network_transport L2
+`
+
 // PTP4LArgs returns the arguments for a free-running measurement session on
-// the given PTP interface.
+// the given PTP interface, creating the log/config directory and a minimal
+// default.cfg when it does not exist.
 func PTP4LArgs(iface, logDir string) []string {
+	_ = os.MkdirAll(logDir, os.ModePerm)
 	dir := filepath.Join(logDir, iface)
 	_ = os.MkdirAll(dir, os.ModePerm)
+	cfgPath := filepath.Join(logDir, "default.cfg")
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		_ = os.WriteFile(cfgPath, []byte(defaultPTP4LConfig), 0o644)
+	}
 	return []string{
-		"ptp4l", "-f", filepath.Join(logDir, "default.cfg"),
+		"ptp4l", "-f", cfgPath,
 		"-i", iface, "-m", "-l", "7", "-s",
 		"-p", "/dev/ptp0",
 	}
