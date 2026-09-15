@@ -161,10 +161,11 @@ func main() {
 
 	daemon.StartReadyServer("0.0.0.0:8081", tracker, stdoutToSocket)
 
-	// Wait for one ticker interval before loading the profile
-	// This allows linuxptp-daemon connection to the cloud-event-proxy container to
-	// be up and running before PTP state logs are printed.
-	time.Sleep(time.Second * time.Duration(cp.updateInterval/2))
+	// Process the node profile immediately at startup instead of waiting for the
+	// first ticker pull. This removes the up-to-update-interval (default 30s) dead
+	// time before the PTP processes are started. The cloud-event-proxy connection
+	// is established independently, with retries, by the event handler.
+	updateNodeProfile(cp, nodeName, ptpConfUpdate)
 	for {
 		select {
 		case <-tickerPull.C:
@@ -174,32 +175,36 @@ func main() {
 				go daemon.RunDeviceStatusUpdate(ptpClient, nodeName, &hwconfigs)
 				refreshNodePtpDevice = false
 			}
-
-			nodeProfile := filepath.Join(cp.profileDir, nodeName)
-			if _, err := os.Stat(nodeProfile); err != nil {
-				if os.IsNotExist(err) {
-					glog.Infof("ptp profile doesn't exist for node: %v", nodeName)
-					continue
-				} else {
-					glog.Errorf("error stating node profile %v: %v", nodeName, err)
-					continue
-				}
-			}
-			nodeProfilesJson, err := os.ReadFile(nodeProfile)
-			if err != nil {
-				glog.Errorf("error reading node profile: %v", nodeProfile)
-				continue
-			}
-
-			err = ptpConfUpdate.UpdateConfig(nodeProfilesJson)
-			if err != nil {
-				glog.Errorf("error updating the node configuration using the profiles loaded: %v", err)
-			}
+			updateNodeProfile(cp, nodeName, ptpConfUpdate)
 		case sig := <-sigCh:
 			glog.Info("signal received, shutting down", sig)
 			closeProcessManager <- true
 			return
 		}
+	}
+}
+
+// updateNodeProfile reads the node profile published by the ptp operator and
+// applies it to the daemon. It is a no-op when the profile has not changed.
+func updateNodeProfile(cp *cliParams, nodeName string, ptpConfUpdate *daemon.LinuxPTPConfUpdate) {
+	nodeProfile := filepath.Join(cp.profileDir, nodeName)
+	if _, err := os.Stat(nodeProfile); err != nil {
+		if os.IsNotExist(err) {
+			glog.Infof("ptp profile doesn't exist for node: %v", nodeName)
+			return
+		}
+		glog.Errorf("error stating node profile %v: %v", nodeName, err)
+		return
+	}
+
+	nodeProfilesJson, err := os.ReadFile(nodeProfile)
+	if err != nil {
+		glog.Errorf("error reading node profile: %v", nodeProfile)
+		return
+	}
+
+	if err := ptpConfUpdate.UpdateConfig(nodeProfilesJson); err != nil {
+		glog.Errorf("error updating the node configuration using the profiles loaded: %v", err)
 	}
 }
 
