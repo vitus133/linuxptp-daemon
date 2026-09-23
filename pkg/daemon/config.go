@@ -20,11 +20,11 @@ import (
 	ptpv1 "github.com/k8snetworkplumbingwg/ptp-operator/api/v1"
 )
 
-// predefined config section names
+// Preserve daemon-local names while sharing section definitions with addons.
 const (
-	GlobalSectionName  = "[global]"
-	NmeaSectionName    = "[nmea]"
-	UnicastSectionName = "[unicast_master_table]"
+	GlobalSectionName  = config.Ptp4lGlobalSectionName
+	NmeaSectionName    = config.Ptp4lNmeaSectionName
+	UnicastSectionName = config.Ptp4lUnicastSectionName
 )
 
 // LinuxPTPUpdate controls whether to update linuxPTP conf

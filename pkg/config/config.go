@@ -14,6 +14,13 @@ import (
 )
 
 const (
+	// Ptp4lGlobalSectionName is the global section header in a ptp4l config.
+	Ptp4lGlobalSectionName = "[global]"
+	// Ptp4lNmeaSectionName is the NMEA section header used by daemon profiles.
+	Ptp4lNmeaSectionName = "[nmea]"
+	// Ptp4lUnicastSectionName is the unicast master table section header.
+	Ptp4lUnicastSectionName = "[unicast_master_table]"
+
 	DefaultUpdateInterval  = 30
 	DefaultProfilePath     = "/etc/linuxptp"
 	DefaultLeapConfigPath  = "/etc/leap"
